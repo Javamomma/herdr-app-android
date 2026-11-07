@@ -283,7 +283,7 @@ private fun Sidebar(
                 Box {
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 8.dp).background(if (selected) Theme.raised else Color.Transparent, RoundedCornerShape(6.dp))
-                            .combinedClickable(onClick = { session.setActiveSpace(s.id); session.peek = null; onPicked() }, onLongClick = { menu = true })
+                            .combinedClickable(onClick = { session.selectSpace(s.id); session.peek = null; onPicked() }, onLongClick = { menu = true })
                             .padding(horizontal = 10.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {

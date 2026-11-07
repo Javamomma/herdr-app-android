@@ -336,7 +336,7 @@ class Session(private val context: Context) {
     private fun rebuild() {
         val order = listOf("") + machines.map { it.name }.sorted()
         spaces = order.flatMap { docs[it]?.spaces.orEmpty() }
-        if (spaces.none { it.id == activeSpace }) setActiveSpace(spaces.firstOrNull()?.id)
+        if (spaces.none { it.id == activeSpace }) selectSpace(spaces.firstOrNull()?.id)
         for (s in spaces) {
             if (s.tabs.none { it.id == activeTab[s.id] }) s.tabs.firstOrNull()?.let { activeTab[s.id] = it.id }
             for (t in s.tabs) {
@@ -392,14 +392,14 @@ class Session(private val context: Context) {
 
     // ---- what is shown ------------------------------------------------------
 
-    fun setActiveSpace(id: String?) {
+    fun selectSpace(id: String?) {
         activeSpace = id
         saveView()
     }
 
     fun showTab(spaceId: String, tabId: String) {
         activeTab[spaceId] = tabId
-        setActiveSpace(spaceId)
+        selectSpace(spaceId)
     }
 
     fun focusPane(tabId: String, paneId: String) {
@@ -554,7 +554,7 @@ class Session(private val context: Context) {
         }
         activeTab[sp] = tb
         focused[tb] = p
-        setActiveSpace(sp)
+        selectSpace(sp)
     }
 
     /** A tab in [spaceId], after the shown one, starting where its focused pane is. */
