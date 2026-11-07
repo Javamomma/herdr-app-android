@@ -28,10 +28,21 @@ phone ──ssh──▶ Mac mini: hc connect ──▶ herdr-core (terminals, a
   start in the account's login shell and leave a shell when they exit.
 - **Files and Changes** panels for the focused terminal's folder: browse and
   read files, `git status` and diffs, *cd here*.
-- **Terminals**: xterm.js with truecolor, mouse, scrollback, the core's first
-  paint and history, credit-based flow control, and a key bar for Esc, Tab,
-  sticky Ctrl/Alt, arrows, Home/End, PgUp/PgDn, `| ~ / - \``, paste, ^C and
-  text size.
+- **Terminals**: a native terminal (our own VT engine drawn on a Canvas, no
+  WebView) with truecolor, 256 colors, wide characters and emoji, alternate
+  screen, scroll regions, bracketed paste, mouse reporting, the core's first
+  paint and 2000 lines of history, and credit-based flow control.
+  - Drag to scroll the scrollback smoothly (with fling); programs that asked
+    for the mouse get wheel events, full-screen programs get arrow keys.
+  - Long-press to select (starts on the word), then Copy. Pinch to change the
+    text size.
+  - The keyboard types straight into the program, with no autocorrect. A key
+    bar adds Esc, Tab, sticky Ctrl/Alt, arrows, Enter, Home/End, PgUp/PgDn,
+    `| ~ / - \``, paste and ^C. A hardware keyboard works too, with modifiers
+    and function keys.
+  - **Type**: a normal text box under the terminal, with autocorrect, swipe
+    and voice typing. Its message is pasted and sent in one go. It opens by
+    itself for agents, and the *type* key turns it on or off for any terminal.
 
 ### Layout on the Fold
 
@@ -97,6 +108,7 @@ Needs JDK 17 and the Android SDK (API 35).
 ```sh
 cd android
 ./gradlew :protocol:test        # the core client, on the JVM
+./gradlew :terminal:test        # the terminal engine, on the JVM
 ./gradlew :app:assembleDebug    # app/build/outputs/apk/debug/app-debug.apk
 ```
 
@@ -105,9 +117,20 @@ cd android
   snapshot, and the layout document's tree operations, ported from the desktop
   app's `src/hc.rs`, `src/layout.rs` and `src/mirror.rs` and tested against a
   fake core.
+- `terminal/`: plain Kotlin. The terminal engine: a bounded VT/xterm parser
+  and screen model (UTF-8, CSI/OSC/DCS, SGR, scroll regions, alternate
+  screen, wide and combining characters, scrollback, resize) plus key, paste
+  and mouse encoding, tested on the JVM with randomly split and garbage input.
 - `app/`: the Android app (Jetpack Compose). `ssh/` connects and keeps keys,
-  `Session.kt` is the state and every change, `term/` hosts xterm.js
-  (`assets/term/`, MIT, see `XTERM-LICENSE`), `ui/` draws it.
+  `Session.kt` is the state and every change, `term/` draws terminals
+  (`TerminalView`: Canvas rendering, touch, IME and hardware keys), `ui/`
+  draws the rest.
+
+The terminal's design (an Android-independent engine, a Canvas view that
+draws only visible rows in styled runs, pixel scrolling with fling, wheel
+reports only for mouse-aware programs, and a composer for agents) follows
+ideas from [Terminal Spike](https://github.com/Anderbone/terminal-spike)'s
+design notes. No code was taken from it.
 
 The CI APK is signed with a debug key. Set up your own signing before
 distributing it.

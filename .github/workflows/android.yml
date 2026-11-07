@@ -31,8 +31,8 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
-      - name: Test the core client and build the APK
-        run: ./gradlew --no-daemon :protocol:test :app:assembleDebug
+      - name: Test the core client and terminal engine, build the APK
+        run: ./gradlew --no-daemon :protocol:test :terminal:test :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
           name: herdr-android-apk

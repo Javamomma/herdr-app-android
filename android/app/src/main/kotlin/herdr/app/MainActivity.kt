@@ -16,6 +16,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         pool = TerminalPool(this, session)
         pool.fontSize = getSharedPreferences("view", MODE_PRIVATE).getInt("font", 13)
+        pool.onFontChanged = { session.saveFont(it) }
         setContent { HerdrRoot(session, pool) }
         if (session.profile.ready) session.connect()
     }

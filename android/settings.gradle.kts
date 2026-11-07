@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "herdr-android"
-include(":protocol", ":app")
+include(":protocol", ":terminal", ":app")

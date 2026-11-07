@@ -685,6 +685,11 @@ class Session(private val context: Context) {
         return pane?.terminal
     }
 
+    /** Per terminal: the Type composer turned on or off by hand (else: on for agents). */
+    val composer = mutableStateMapOf<String, Boolean>()
+    /** Unsent composer drafts, per terminal. */
+    val drafts = mutableStateMapOf<String, String>()
+
     /** Text copied from a terminal, for the clipboard. */
     var copied by mutableStateOf<String?>(null)
 

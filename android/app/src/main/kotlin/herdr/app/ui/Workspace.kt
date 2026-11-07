@@ -565,7 +565,7 @@ private fun PaneButton(icon: ImageVector, label: String, onClick: () -> Unit) {
     IconButton(onClick = onClick, modifier = Modifier.size(28.dp)) { Icon(icon, label, tint = Theme.dim, modifier = Modifier.size(16.dp)) }
 }
 
-/** The terminal's WebView, moved into whichever box shows it. */
+/** The terminal's native view, moved into whichever box shows it. */
 @Composable
 fun TerminalBox(pool: TerminalPool, address: String, onTouch: () -> Unit) {
     val ctl = remember(address) { pool.acquire(address) }
@@ -574,14 +574,27 @@ fun TerminalBox(pool: TerminalPool, address: String, onTouch: () -> Unit) {
         AndroidView(
             factory = { ctx -> FrameLayout(ctx) },
             update = { frame ->
-                if (ctl.web.parent !== frame) {
-                    (ctl.web.parent as? ViewGroup)?.removeView(ctl.web)
-                    frame.addView(ctl.web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                if (ctl.view.parent !== frame) {
+                    (ctl.view.parent as? ViewGroup)?.removeView(ctl.view)
+                    frame.addView(ctl.view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
                 }
-                ctl.web.setOnFocusChangeListener { _, has -> if (has) onTouch() }
+                ctl.view.setOnFocusChangeListener { _, has -> if (has) onTouch() }
             },
             modifier = Modifier.fillMaxSize(),
         )
+        if (ctl.selection.isNotEmpty()) {
+            val clipboard = LocalClipboardManager.current
+            Row(
+                Modifier.align(Alignment.TopEnd).padding(8.dp).background(Theme.raised, RoundedCornerShape(8.dp)).border(1.dp, Theme.border, RoundedCornerShape(8.dp)),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.TextButton(onClick = {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(ctl.selection))
+                    ctl.clearSelection()
+                }) { Text("Copy") }
+                androidx.compose.material3.TextButton(onClick = { ctl.clearSelection() }) { Text("Clear", color = Theme.dim) }
+            }
+        }
     }
 }
 
@@ -604,11 +617,18 @@ private fun Peek(session: Session, pool: TerminalPool, address: String) {
     }
 }
 
-/** Keys a phone keyboard lacks, for the focused terminal. */
+/**
+ * Keys a phone keyboard lacks, for the focused terminal, and the Type
+ * composer: a normal text field (autocorrect, swipe, voice) whose message is
+ * pasted and sent in one go. It opens by itself for agents.
+ */
 @Composable
 fun KeyBar(session: Session, pool: TerminalPool) {
     val clipboard = LocalClipboardManager.current
-    fun target() = pool.get(session.peek ?: session.focusedTerminal())
+    val address = session.peek ?: session.focusedTerminal()
+    fun target() = pool.get(address)
+    val isAgent = address != null && session.terminals[address]?.get("status")?.let { it !is kotlinx.serialization.json.JsonNull } == true
+    val composing = address != null && (session.composer[address] ?: isAgent)
     @Composable
     fun K(label: String, active: Boolean = false, onClick: () -> Unit) {
         Text(
@@ -617,15 +637,18 @@ fun KeyBar(session: Session, pool: TerminalPool) {
                 .clickable(onClick = onClick).padding(horizontal = 11.dp, vertical = 8.dp),
         )
     }
+    if (composing && address != null) Composer(session, address) { target() }
     Row(Modifier.fillMaxWidth().background(Theme.panel).horizontalScroll(rememberScrollState()).padding(4.dp)) {
+        K("type", composing) { if (address != null) session.composer[address] = !composing }
         K("esc") { target()?.key("esc") }
         K("tab") { target()?.key("tab") }
-        K("ctrl", session.ctrl) { session.ctrl = !session.ctrl; target()?.setMods(session.ctrl, session.alt) }
-        K("alt", session.alt) { session.alt = !session.alt; target()?.setMods(session.ctrl, session.alt) }
+        K("ctrl", session.ctrl) { session.ctrl = !session.ctrl }
+        K("alt", session.alt) { session.alt = !session.alt }
         K("←") { target()?.key("left") }
         K("↑") { target()?.key("up") }
         K("↓") { target()?.key("down") }
         K("→") { target()?.key("right") }
+        K("⏎") { target()?.key("enter") }
         for (c in listOf("|", "~", "/", "-", "`")) K(c) { target()?.type(c) }
         K("⇧tab") { target()?.key("shift-tab") }
         K("home") { target()?.key("home") }
@@ -634,8 +657,8 @@ fun KeyBar(session: Session, pool: TerminalPool) {
         K("pgdn") { target()?.key("pgdn") }
         K("paste") { clipboard.getText()?.text?.let { target()?.paste(it) } }
         K("^C") { target()?.type("\u0003") }
-        K("A−") { pool.fontSize = (pool.fontSize - 1).coerceAtLeast(8); session.saveFont(pool.fontSize) }
-        K("A+") { pool.fontSize = (pool.fontSize + 1).coerceAtMost(28); session.saveFont(pool.fontSize) }
+        K("A−") { pool.fontSize = (pool.fontSize - 1).coerceAtLeast(7); session.saveFont(pool.fontSize) }
+        K("A+") { pool.fontSize = (pool.fontSize + 1).coerceAtMost(32); session.saveFont(pool.fontSize) }
     }
     LaunchedEffect(session.copied) {
         session.copied?.let {
@@ -643,5 +666,27 @@ fun KeyBar(session: Session, pool: TerminalPool) {
             session.notice = if (it.isEmpty()) "Nothing selected: long-press text in the terminal first." else "Copied."
             session.copied = null
         }
+    }
+}
+
+/** A draft for an agent, kept per terminal until sent. */
+@Composable
+private fun Composer(session: Session, address: String, target: () -> herdr.app.term.TerminalController?) {
+    val draft = session.drafts[address] ?: ""
+    Row(Modifier.fillMaxWidth().background(Theme.panel).padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.Bottom) {
+        androidx.compose.material3.OutlinedTextField(
+            value = draft, onValueChange = { session.drafts[address] = it },
+            placeholder = { Text("Message the agent…", fontSize = 14.sp) },
+            maxLines = 6, modifier = Modifier.weight(1f),
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences),
+        )
+        Spacer(Modifier.width(6.dp))
+        androidx.compose.material3.Button(
+            onClick = {
+                target()?.submit(draft)
+                session.drafts.remove(address)
+            },
+            modifier = Modifier.padding(bottom = 4.dp),
+        ) { Text("Send") }
     }
 }
