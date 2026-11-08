@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.Herdr" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/herdr_bg</item>
+        <item name="android:statusBarColor">@color/herdr_bg</item>
+        <item name="android:navigationBarColor">@color/herdr_bg</item>
+    </style>
+    <color name="herdr_bg">#16171B</color>
+    <color name="herdr_accent">#E8A04C</color>
+</resources>
