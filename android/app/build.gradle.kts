@@ -21,6 +21,14 @@ android {
     // so every release installs over the last. Without it, the debug key.
     val keystore = System.getenv("HERDR_KEYSTORE")
     signingConfigs {
+        // One shared debug key (committed, as is usual: it signs only test
+        // builds), so each CI build installs over the last without an uninstall.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         if (keystore != null) {
             create("release") {
                 storeFile = file(keystore)
