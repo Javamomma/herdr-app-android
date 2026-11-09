@@ -39,6 +39,9 @@ class DemoCoreTest {
         })
         assertTrue(painted.await(5, TimeUnit.SECONDS))
 
+        val read = core.call("terminal.read", obj("terminal" to "t1"))["text"].str!!
+        assertEquals(listOf("Yes", "Yes, and don't ask again this session", "No, and tell the agent what to do"), Prompts.choices(read).map { it.label })
+
         val v = doc["version"].long!!
         val r = core.call("doc.set", obj("name" to DOC_NAME, "version" to v, "value" to captureDocument(spaces.drop(1), null)))
         assertEquals(v + 1, r["version"].long)

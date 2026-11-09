@@ -37,6 +37,7 @@ class MainActivity : FragmentActivity() {
         pool.fontSize = getSharedPreferences("view", MODE_PRIVATE).getInt("font", 13)
         pool.onFontChanged = { session.saveFont(it) }
         locked = session.lockEnabled
+        runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()?.let { session.checkForUpdate(it) }
         setContent { HerdrRoot(session, pool, locked = locked, onUnlock = ::unlock) }
         if (!handle(intent) && session.profile.ready) session.connect()
         if (Build.VERSION.SDK_INT >= 33 && session.alerts &&

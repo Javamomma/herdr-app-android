@@ -150,7 +150,14 @@ class DemoCore {
                 "${g}BUILD SUCCESSFUL$r in 6s",
                 "${prompt}",
             ).joinToString("\r\n")
-            "t4" -> listOf(
+            "t4" -> if (terminals["t4"]?.get("status")?.obj?.get("state").str == "blocked") listOf(
+                "$dim> Refactor the nav bar into a component and add tests$r", "",
+                "${c}•$r The new nav needs a column on users. Run the migration?", "",
+                "  $b$ npx prisma migrate deploy$r", "",
+                "› 1. Yes, run it",
+                "  2. Yes, and allow migrations for this session",
+                "  3. No, I'll do it myself",
+            ).joinToString("\r\n") else listOf(
                 "$dim> Refactor the nav bar into a component and add tests$r", "",
                 "${c}•$r Reading src/components/Nav.tsx",
                 "${c}•$r Splitting NavItem and NavMenu",
@@ -281,6 +288,12 @@ class DemoCore {
                 terminals.remove(t)
                 reply(id, obj())
                 event("removed", t, obj())
+            }
+            "terminal.read" -> {
+                val t = p["terminal"].str ?: ""
+                if (terminals[t] == null) return error(id, "no terminal $t", "not_found")
+                val text = screen(t).replace(Regex("\u001b\\[[0-9;?]*[A-Za-z]"), "").replace("\r\n", "\n")
+                reply(id, obj("text" to text, "how" to "screen", "complete" to true))
             }
             "terminal.send", "terminal.keys" -> {
                 val t = p["terminal"].str ?: ""

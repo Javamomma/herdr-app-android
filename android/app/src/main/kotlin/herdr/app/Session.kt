@@ -34,6 +34,7 @@ import herdr.core.long
 import herdr.core.machineOf
 import herdr.core.mismatch
 import herdr.core.newTab
+import herdr.core.Prompts
 import herdr.core.obj
 import herdr.core.panes
 import herdr.core.parseDocument
@@ -171,6 +172,21 @@ class Session(private val context: Context) {
     var onAgents: ((List<Agent>) -> Unit)? = null
     /** Asked to show a panel (files, changes) or the agents list, e.g. from a notification or the demo. */
     var requested by mutableStateOf<String?>(null)
+    /** Each agent's screen text as last read (previews, and the answers it offers). */
+    val screens = mutableStateMapOf<String, String>()
+    /** Quick phrases for the Type box. */
+    var phrases by mutableStateOf(loadPhrases())
+        private set
+    /** A newer release: its version and page. */
+    var update by mutableStateOf<Pair<String, String>?>(null)
+        private set
+    /** A file to show in the Files panel (a tapped path in a terminal). */
+    var fileToOpen by mutableStateOf<String?>(null)
+    /** Showing what was cached from the last connection, not live state. */
+    var stale by mutableStateOf(false)
+        private set
+    private val cache = context.getSharedPreferences("cache", Context.MODE_PRIVATE)
+    private var cacheJob: Job? = null
     private val lastStates = HashMap<String, String>()
     private var statesKnown = false
 
@@ -186,6 +202,39 @@ class Session(private val context: Context) {
         runCatching {
             val saved = json.parseToJsonElement(viewPrefs.getString("tabs", "{}")!!).jsonObject
             for ((k, v) in saved) v.str?.let { activeTab[k] = it }
+        }
+        loadCache()
+    }
+
+    /** The last connection's spaces and agents, shown at once on launch, marked stale. */
+    private fun loadCache() {
+        if (!profile.ready) return
+        runCatching {
+            val saved = json.parseToJsonElement(cache.getString("state", null) ?: return).jsonObject
+            machines = saved["machines"].arr.mapNotNull { m -> m.str?.let { MachineInfo(it, "", false) } }
+            for ((k, v) in saved["docs"].obj ?: JsonObject(emptyMap())) {
+                docs[k] = DocSlot(v["version"].long ?: 0, parseDocument(v["value"], k.ifEmpty { null }))
+            }
+            terminals = saved["terminals"].arr.mapNotNull { it.obj }.associateBy { it["address"].str ?: "" }
+            home = saved["home"].str
+            stale = docs.isNotEmpty()
+            rebuild()
+        }
+    }
+
+    /** Saved a moment after things settle, never for the demo. */
+    private fun saveCache() {
+        if (demo || core == null) return
+        cacheJob?.cancel()
+        cacheJob = main.launch {
+            delay(2_000)
+            val state = obj(
+                "machines" to machines.map { it.name },
+                "docs" to docs.mapValues { (k, v) -> obj("version" to v.version, "value" to captureDocument(v.spaces, k.ifEmpty { null })) },
+                "terminals" to terminals.values.toList(),
+                "home" to home,
+            )
+            cache.edit().putString("state", state.toString()).apply()
         }
     }
 
@@ -389,6 +438,12 @@ class Session(private val context: Context) {
                 scheduleReconnect()
             }
         }
+        if (stale) {
+            // The cache said what was there; now the core says what is.
+            docs.clear()
+            screens.clear()
+            stale = false
+        }
         lines?.let { l -> setTerminals(synchronized(l) { l.live() }) }
         generation++
         conn = Conn.Connected
@@ -402,6 +457,60 @@ class Session(private val context: Context) {
         terminals = live.associateBy { it["address"].str ?: "" }
         shareSeen()
         noticeAgents()
+        saveCache()
+    }
+
+    /** Reads an agent's screen (text only, no attach). */
+    suspend fun readScreen(address: String): String? =
+        runCatching { io { it.call("terminal.read", obj("terminal" to address), timeoutMs = 5_000) }["text"].str }
+            .getOrNull()?.also { screens[address] = it }
+
+    /** Refreshes the screens of these agents, for their previews and answers. */
+    fun refreshScreens(addresses: Collection<String>) {
+        if (core == null) return
+        main.launch { for (a in addresses) readScreen(a) }
+    }
+
+    /**
+     * Answers an agent's question with one of its own options. Reads the
+     * screen again first: if the question changed, nothing is sent.
+     */
+    fun choose(address: String, label: String) = attempt("Cannot answer") {
+        val now = readScreen(address) ?: return@attempt
+        val choices = Prompts.choices(now)
+        val target = choices.firstOrNull { it.label == label }
+        if (target == null) {
+            notice = "The question changed. Look at it again."
+            return@attempt
+        }
+        io { it.call("terminal.keys", obj("terminal" to address, "keys" to Prompts.keys(choices, target))) }
+        delay(500)
+        readScreen(address)
+    }
+
+    private fun loadPhrases(): List<String> =
+        settings.getString("phrases", null)?.let { runCatching { json.parseToJsonElement(it).arr.mapNotNull { e -> e.str } }.getOrNull() }
+            ?: listOf("Continue", "Yes, go ahead", "Run the tests", "Explain that simply", "Commit this with a good message")
+
+    fun savePhrases(list: List<String>) {
+        phrases = list
+        settings.edit().putString("phrases", kotlinx.serialization.json.JsonArray(list.map { kotlinx.serialization.json.JsonPrimitive(it) }).toString()).apply()
+    }
+
+    /** Looks for a newer release on GitHub, at most twice a day. */
+    fun checkForUpdate(currentVersion: String) {
+        val last = settings.getLong("updateChecked", 0)
+        if (System.currentTimeMillis() - last < 12 * 3600_000L && update == null) {
+            settings.getString("updateFound", null)?.split('|')?.takeIf { it.size == 2 }?.let { (v, url) ->
+                if (Updates.newer(v, currentVersion)) update = v to url
+            }
+            return
+        }
+        main.launch {
+            val found = Updates.latest() ?: return@launch
+            settings.edit().putLong("updateChecked", System.currentTimeMillis()).putString("updateFound", "${found.first}|${found.second}").apply()
+            if (Updates.newer(found.first, currentVersion)) update = found
+        }
     }
 
     /**
@@ -482,6 +591,7 @@ class Session(private val context: Context) {
     }
 
     private fun rebuild() {
+        saveCache()
         val order = listOf("") + machines.map { it.name }.sorted()
         spaces = order.flatMap { docs[it]?.spaces.orEmpty() }
         if (spaces.none { it.id == activeSpace }) selectSpace(spaces.firstOrNull()?.id)

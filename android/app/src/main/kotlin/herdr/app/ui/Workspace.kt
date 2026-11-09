@@ -113,7 +113,7 @@ private val WIDER = 900.dp
 fun HerdrRoot(session: Session, pool: TerminalPool, locked: Boolean = false, onUnlock: () -> Unit = {}) {
     var editing by remember { mutableStateOf(false) }
     LaunchedEffect(session.generation, session.terminals) { pool.reattach() }
-    val showConnect = editing || (!session.demo && (!session.profile.ready ||
+    val showConnect = editing || (session.conn as? Conn.Failed)?.hostKey != null || (!session.demo && (!session.profile.ready ||
         (session.spaces.isEmpty() && session.conn !is Conn.Connected)))
     androidx.compose.material3.MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme(
         primary = Theme.accent, background = Theme.bg, surface = Theme.panel, onSurface = Theme.text, onBackground = Theme.text,
@@ -151,8 +151,24 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
             "work" -> { panel = null; agentsHome = false }
             "settings" -> settings = true
             "snippets" -> { panel = null; snippetsOpen = true }
+            null -> {}
+            else -> if (session.requested!!.startsWith("file:")) {
+                session.fileToOpen = session.requested!!.removePrefix("file:")
+                panel = "files"
+            }
         }
         session.requested = null
+    }
+
+    // Agents that need you (and, on the agents list, all of them): their
+    // screens, for previews and the answers their questions offer.
+    LaunchedEffect(session.generation) {
+        while (true) {
+            val agents = session.agents()
+            val wanted = agents.filter { it.state == "blocked" || (agentsHome && it.state == "working") }.map { it.address }
+            if (wanted.isNotEmpty()) session.refreshScreens(wanted)
+            kotlinx.coroutines.delay(if (agentsHome) 3_000 else 5_000)
+        }
     }
 
     // What's on screen counts as seen (shared with the desktop as herdr.seen).
@@ -246,12 +262,13 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
 @Composable
 private fun ConnectionBanner(session: Session) {
     val c = session.conn
-    val text = when (c) {
+    val prefix = if (session.stale) "Showing what was there last time. " else ""
+    val text = prefix + when (c) {
         is Conn.Connecting -> c.step
         is Conn.Failed -> c.message + if (c.retrying) " Reconnecting…" else ""
         Conn.Idle -> "Not connected."
-        Conn.Connected -> null
-    } ?: return
+        Conn.Connected -> if (prefix.isEmpty()) return else ""
+    }
     Row(
         Modifier.fillMaxWidth().background(Theme.raised).clickable { session.connect() }.padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -294,7 +311,9 @@ private fun Sidebar(
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Herdr", color = Theme.accent, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
                 Dot(if (session.conn is Conn.Connected) "idle" else "blocked")
-                IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Settings", tint = Theme.dim) }
+                IconButton(onClick = onSettings) {
+                    Icon(Icons.Default.Settings, "Settings", tint = if (session.update != null) Theme.accent else Theme.dim)
+                }
             }
         }
         for (machine in groups) {
@@ -355,6 +374,38 @@ private fun AgentRow(session: Session, a: Agent, onPicked: () -> Unit) {
             Text(
                 listOfNotNull(a.state, space?.let { session.spaceName(it) }, a.title.ifBlank { null }).joinToString(" · "),
                 color = Theme.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            if (a.state == "blocked") Answers(session, a, compact = true)
+        }
+    }
+}
+
+/**
+ * The answers an agent's question offers, read from its screen, as buttons.
+ * Risky ones (can't be undone, or stop future questions) need a press-and-hold.
+ */
+@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+fun Answers(session: Session, a: Agent, compact: Boolean) {
+    val screen = session.screens[a.address] ?: return
+    val choices = remember(screen) { herdr.core.Prompts.choices(screen) }
+    if (choices.isEmpty()) return
+    androidx.compose.foundation.layout.FlowRow(
+        Modifier.padding(top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        for (c in choices) {
+            val color = if (c.risky) Theme.stateColor("blocked") else Theme.accent
+            Text(
+                (c.number?.let { "$it. " } ?: "") + c.label + if (c.risky) "  (hold)" else "",
+                color = color, fontSize = if (compact) 12.sp else 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.border(1.dp, color.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                    .combinedClickable(
+                        onClick = { if (c.risky) session.notice = "Press and hold to choose \"${c.label}\"" else session.choose(a.address, c.label) },
+                        onLongClick = { session.choose(a.address, c.label) },
+                    )
+                    .padding(horizontal = 10.dp, vertical = if (compact) 5.dp else 8.dp),
             )
         }
     }
@@ -702,10 +753,34 @@ fun KeyBar(session: Session, pool: TerminalPool) {
     }
 }
 
-/** A draft for an agent, kept per terminal until sent. */
+/** A draft for an agent, kept per terminal until sent, with quick phrases and slash commands. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun Composer(session: Session, address: String, target: () -> herdr.app.term.TerminalController?) {
     val draft = session.drafts[address] ?: ""
+    val app = session.agents().firstOrNull { it.address == address }?.app ?: ""
+    val slash = if (app.contains("codex", ignoreCase = true)) listOf("/new", "/model", "/approvals", "/diff", "/status", "/compact")
+        else listOf("/clear", "/compact", "/model", "/review", "/cost", "/resume", "/init", "/help")
+    // Phrases, or the agent's slash commands once the draft starts with "/".
+    val chips = if (draft.startsWith("/")) slash.filter { it.startsWith(draft.trim()) } else session.phrases
+    Row(
+        Modifier.fillMaxWidth().background(Theme.panel).horizontalScroll(rememberScrollState()).padding(start = 6.dp, end = 6.dp, top = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        @Composable
+        fun Chip(text: String, onLong: (() -> Unit)? = null, onClick: () -> Unit) {
+            Text(
+                text, color = Theme.text, fontSize = 13.sp, maxLines = 1,
+                modifier = Modifier.background(Theme.raised, RoundedCornerShape(14.dp))
+                    .combinedClickable(onClick = onClick, onLongClick = onLong).padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
+        if (!draft.startsWith("/")) Chip("/") { session.drafts[address] = "/" }
+        for (c in chips) Chip(c, onLong = if (draft.startsWith("/")) null else ({ session.savePhrases(session.phrases - c); session.notice = "Removed \"$c\"" })) {
+            session.drafts[address] = if (c.startsWith("/")) c else (if (draft.isBlank()) c else "$draft $c")
+        }
+        if (draft.isNotBlank() && !draft.startsWith("/") && draft !in session.phrases) Chip("+ save phrase") { session.savePhrases(session.phrases + draft.trim()) }
+    }
     Row(Modifier.fillMaxWidth().background(Theme.panel).padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.Bottom) {
         androidx.compose.material3.OutlinedTextField(
             value = draft, onValueChange = { session.drafts[address] = it },
@@ -755,8 +830,19 @@ private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit) {
                     Text(a.app + if (a.parent != null) " · worker" else "", color = Theme.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
                     Text(a.title.ifBlank { a.state }, color = Theme.dim, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(listOfNotNull(a.state, space?.let { session.spaceName(it) }).joinToString(" · "), color = Theme.stateColor(a.state), fontSize = 12.sp)
+                    session.screens[a.address]?.let { screen ->
+                        val tail = remember(screen) { herdr.core.Prompts.tail(screen, 3) }
+                        if (tail.isNotEmpty() && herdr.core.Prompts.choices(screen).isEmpty()) {
+                            Text(
+                                tail.joinToString("\n"), color = Theme.dim, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
+                                maxLines = 3, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 6.dp).fillMaxWidth().background(Theme.bg, RoundedCornerShape(6.dp)).padding(8.dp),
+                            )
+                        }
+                    }
+                    if (a.state == "blocked") Answers(session, a, compact = false)
                 }
-                if (a.state == "blocked") {
+                if (a.state == "blocked" && session.screens[a.address]?.let { herdr.core.Prompts.choices(it).isEmpty() } != false) {
                     androidx.compose.material3.TextButton(onClick = { session.answerKeys(a.address, listOf("enter")) }) { Text("Allow") }
                 }
             }
