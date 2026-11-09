@@ -191,10 +191,10 @@ class Session(private val context: Context) {
 
     private fun key(machine: String?) = machine ?: ""
 
-    fun setAlerts(on: Boolean) { alerts = on; settings.edit().putBoolean("alerts", on).apply(); onAgents?.invoke(agents()) }
-    fun setLock(on: Boolean) { lockEnabled = on; settings.edit().putBoolean("lock", on).apply() }
-    fun setLockAfter(minutes: Int) { lockAfterMinutes = minutes; settings.edit().putInt("lockAfter", minutes).apply() }
-    fun setAgentsWhenFolded(on: Boolean) { agentsWhenFolded = on; settings.edit().putBoolean("agentsFolded", on).apply() }
+    fun updateAlerts(on: Boolean) { alerts = on; settings.edit().putBoolean("alerts", on).apply(); onAgents?.invoke(agents()) }
+    fun updateLock(on: Boolean) { lockEnabled = on; settings.edit().putBoolean("lock", on).apply() }
+    fun updateLockAfter(minutes: Int) { lockAfterMinutes = minutes; settings.edit().putInt("lockAfter", minutes).apply() }
+    fun updateAgentsWhenFolded(on: Boolean) { agentsWhenFolded = on; settings.edit().putBoolean("agentsFolded", on).apply() }
 
     private fun loadSnippets(): List<Snippet> {
         val saved = settings.getString("snippets", null) ?: return listOf(

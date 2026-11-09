@@ -135,13 +135,13 @@ fun SettingsDialog(session: Session, pool: TerminalPool, onDismiss: () -> Unit, 
                 val p = session.profile
                 Text("${p.user}@${p.host}:${p.port}", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
                 Text("herdr-core ${session.coreVersion.ifEmpty { "–" }} · ${session.terminals.size} live terminals", color = Theme.dim, fontSize = 12.sp)
-                Toggle("Notify me when an agent needs me", "Stays connected in the background", session.alerts) { session.setAlerts(it) }
-                Toggle("Lock with fingerprint or PIN", "Asks when the app opens", session.lockEnabled) { session.setLock(it) }
+                Toggle("Notify me when an agent needs me", "Stays connected in the background", session.alerts) { session.updateAlerts(it) }
+                Toggle("Lock with fingerprint or PIN", "Asks when the app opens", session.lockEnabled) { session.updateLock(it) }
                 if (session.lockEnabled) {
                     Text("Lock again after ${session.lockAfterMinutes} min away", fontSize = 13.sp)
-                    Slider(value = session.lockAfterMinutes.toFloat(), onValueChange = { session.setLockAfter(it.toInt()) }, valueRange = 0f..30f, steps = 5)
+                    Slider(value = session.lockAfterMinutes.toFloat(), onValueChange = { session.updateLockAfter(it.toInt()) }, valueRange = 0f..30f, steps = 5)
                 }
-                Toggle("Folded: open to agents", "The cover screen starts on the agents list", session.agentsWhenFolded) { session.setAgentsWhenFolded(it) }
+                Toggle("Folded: open to agents", "The cover screen starts on the agents list", session.agentsWhenFolded) { session.updateAgentsWhenFolded(it) }
                 Text("Terminal text: ${font.toInt()} px", fontSize = 13.sp)
                 Slider(value = font, onValueChange = { font = it }, valueRange = 8f..24f, steps = 15, onValueChangeFinished = {
                     pool.fontSize = font.toInt()
