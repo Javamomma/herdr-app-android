@@ -9,9 +9,11 @@ tabs, splits and agents as the Herdr desktop app, live in both directions.
 Terminals keep running on the Mac when the phone sleeps, loses signal or the
 app closes.
 
-| Unfolded | Folded | Notifications |
+![Unfolded: spaces, agents and a split tab, with an agent's notification arriving](docs/screenshots/08-unfolded-notification.png)
+
+| Folded: your agents | Folded: a terminal | Saved commands |
 |---|---|---|
-| ![Unfolded workspace](docs/screenshots/02-unfolded-workspace.png) | ![Agents on the cover screen](docs/screenshots/05-folded-agents.png) | ![An agent needs you](docs/screenshots/03-notification.png) |
+| ![Agents on the cover screen](docs/screenshots/05-folded-agents.png) | ![A terminal on the cover screen](docs/screenshots/06-folded-terminal.png) | ![Saved commands](docs/screenshots/07-folded-snippets.png) |
 
 *Screenshots show the built-in demo (sample data, no Mac).*
 
