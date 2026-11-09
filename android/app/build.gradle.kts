@@ -13,16 +13,37 @@ android {
         applicationId = "io.github.javamomma.herdr"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+    }
+
+    // Releases are signed with one key kept as repository secrets (RELEASING.md),
+    // so every release installs over the last. Without it, the debug key.
+    val keystore = System.getenv("HERDR_KEYSTORE")
+    signingConfigs {
+        // One shared debug key (committed, as is usual: it signs only test
+        // builds), so each CI build installs over the last without an uninstall.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+        if (keystore != null) {
+            create("release") {
+                storeFile = file(keystore)
+                storeType = "pkcs12"
+                storePassword = System.getenv("HERDR_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("HERDR_KEY_ALIAS") ?: "herdr"
+                keyPassword = System.getenv("HERDR_KEY_PASSWORD") ?: System.getenv("HERDR_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Signed with the debug key so CI's APK installs without a keystore;
-            // set up your own signing before publishing anywhere.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 
@@ -56,6 +77,8 @@ dependencies {
     implementation("androidx.compose.material3:material3-window-size-class")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.fragment:fragment-ktx:1.8.5")
+    implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")

@@ -151,6 +151,8 @@ class TerminalController(context: Context, val address: String, private val sess
 
     fun focus() = view.showKeyboard()
 
+    fun toggleKeyboard(visible: Boolean) = if (visible) view.hideKeyboard() else view.showKeyboard()
+
     fun copySelection(done: (String) -> Unit) = done(view.selectionText())
 
     fun clearSelection() = view.clearSelection()

@@ -132,6 +132,9 @@ fun ConnectScreen(session: Session, onDone: (() -> Unit)? = null) {
                 onClick = { connect() }, enabled = host.isNotBlank() && user.isNotBlank() && conn !is Conn.Connecting,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Connect") }
+            OutlinedButton(onClick = { session.connectDemo(); onDone?.invoke() }, modifier = Modifier.fillMaxWidth()) {
+                Text("Try the demo (no Mac needed)")
+            }
             Help()
         }
     }

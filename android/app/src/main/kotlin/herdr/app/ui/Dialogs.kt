@@ -5,7 +5,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Slider
@@ -133,6 +135,13 @@ fun SettingsDialog(session: Session, pool: TerminalPool, onDismiss: () -> Unit, 
                 val p = session.profile
                 Text("${p.user}@${p.host}:${p.port}", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
                 Text("herdr-core ${session.coreVersion.ifEmpty { "–" }} · ${session.terminals.size} live terminals", color = Theme.dim, fontSize = 12.sp)
+                Toggle("Notify me when an agent needs me", "Stays connected in the background", session.alerts) { session.updateAlerts(it) }
+                Toggle("Lock with fingerprint or PIN", "Asks when the app opens", session.lockEnabled) { session.updateLock(it) }
+                if (session.lockEnabled) {
+                    Text("Lock again after ${session.lockAfterMinutes} min away", fontSize = 13.sp)
+                    Slider(value = session.lockAfterMinutes.toFloat(), onValueChange = { session.updateLockAfter(it.toInt()) }, valueRange = 0f..30f, steps = 5)
+                }
+                Toggle("Folded: open to agents", "The cover screen starts on the agents list", session.agentsWhenFolded) { session.updateAgentsWhenFolded(it) }
                 Text("Terminal text: ${font.toInt()} px", fontSize = 13.sp)
                 Slider(value = font, onValueChange = { font = it }, valueRange = 8f..24f, steps = 15, onValueChangeFinished = {
                     pool.fontSize = font.toInt()
@@ -149,5 +158,90 @@ fun SettingsDialog(session: Session, pool: TerminalPool, onDismiss: () -> Unit, 
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
+}
+
+
+@Composable
+private fun Toggle(title: String, detail: String, on: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 14.sp)
+            Text(detail, color = Theme.dim, fontSize = 12.sp)
+        }
+        androidx.compose.material3.Switch(checked = on, onCheckedChange = onChange)
+    }
+}
+
+/** Saved commands: one tap types one into the focused terminal, or starts it in a new tab. */
+@Composable
+fun SnippetsDialog(session: Session, pool: TerminalPool, onDismiss: () -> Unit) {
+    var editing by remember { mutableStateOf<Int?>(null) }
+    var name by remember { mutableStateOf("") }
+    var command by remember { mutableStateOf("") }
+    var newTab by remember { mutableStateOf(false) }
+    val target = session.peek ?: session.focusedTerminal()
+    fun edit(i: Int) {
+        editing = i
+        val s = session.snippets.getOrNull(i)
+        name = s?.name ?: ""
+        command = s?.command ?: ""
+        newTab = s?.newTab ?: false
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (editing == null) "Saved commands" else "Edit command") },
+        text = {
+            if (editing == null) {
+                androidx.compose.foundation.lazy.LazyColumn {
+                    items(session.snippets.size) { i ->
+                        val s = session.snippets[i]
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.weight(1f).clickable {
+                                session.runSnippet(s, target)
+                                onDismiss()
+                            }.padding(vertical = 8.dp)) {
+                                Text(s.name, fontSize = 15.sp)
+                                Text((if (s.newTab) "new tab: " else "") + s.command, color = Theme.dim, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1)
+                            }
+                            TextButton(onClick = { edit(i) }) { Text("Edit", color = Theme.dim) }
+                        }
+                    }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Field("Name", name, { name = it }, "Run tests")
+                    Field("Command", command, { command = it }, "npm test", mono = true)
+                    Toggle("Start in a new tab", "Else typed into the focused terminal", newTab) { newTab = it }
+                }
+            }
+        },
+        confirmButton = {
+            if (editing == null) {
+                TextButton(onClick = { edit(session.snippets.size) }) { Text("Add") }
+            } else {
+                TextButton(enabled = name.isNotBlank() && command.isNotBlank(), onClick = {
+                    val list = session.snippets.toMutableList()
+                    val item = herdr.app.Snippet(name.trim(), command.trim(), newTab)
+                    val i = editing!!
+                    if (i < list.size) list[i] = item else list.add(item)
+                    session.saveSnippets(list)
+                    editing = null
+                }) { Text("Save") }
+            }
+        },
+        dismissButton = {
+            if (editing == null) {
+                TextButton(onClick = onDismiss) { Text("Close") }
+            } else {
+                Row {
+                    if (editing!! < session.snippets.size) TextButton(onClick = {
+                        session.saveSnippets(session.snippets.filterIndexed { k, _ -> k != editing })
+                        editing = null
+                    }) { Text("Delete", color = Theme.stateColor("blocked")) }
+                    TextButton(onClick = { editing = null }) { Text("Back") }
+                }
+            }
+        },
     )
 }
