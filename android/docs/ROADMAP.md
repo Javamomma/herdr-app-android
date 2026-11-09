@@ -38,7 +38,7 @@ live with the desktop app; agents list; notifications with Allow / Deny /
 Reply; native terminal; Type box; saved commands; cover-screen agents view;
 widget; app lock; network-change reconnect; demo mode; CI screenshots.
 
-Waiting on the founder: the standalone repo, the release signing secrets, and
+Waiting on the founder: the release signing secrets (RELEASING.md), and
 asking Can whether the name is fine (docs/LAUNCH.md).
 
 ## The landscape (November 2026)
@@ -74,7 +74,8 @@ Apache-2.0.
 
 ## Next, in order
 
-1. Split into its own repo and ship 0.2.0 as a signed GitHub release.
+1. ~~Split into its own repo~~ (github.com/Javamomma/Herdr-Android, history
+   kept); ship 0.2.0 as a signed GitHub release.
 2. ~~All six ideas above~~: built in 0.2.0 (answer buttons, previews, instant
    stale state, tappable links and paths, update check, phrases).
 3. Check them on the Fold; tune answer parsing for more agents.
@@ -94,3 +95,5 @@ Apache-2.0.
   direction (this file).
 - 2026-11-09: Other Claude sessions work through branches and pull requests
   here (AGENTS.md); the TUIOS space comes in that way.
+- 2026-11-09: The app moved to its own repository, Javamomma/Herdr-Android,
+  from the `android/` folder of the herdr-app fork (history kept).

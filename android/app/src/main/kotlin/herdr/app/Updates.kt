@@ -12,7 +12,7 @@ import java.net.URL
 /** New releases, from GitHub Releases (no account, nothing sent but the request). */
 object Updates {
     /** Where releases are published. */
-    const val REPO = "Javamomma/herdr-android"
+    const val REPO = "Javamomma/Herdr-Android"
 
     /** The latest release's version and page, or null (offline, none yet). */
     suspend fun latest(): Pair<String, String>? = withContext(Dispatchers.IO) {

@@ -43,7 +43,7 @@ On the Fold: swipe down twice → Screen recorder (Media and sounds). Record:
 > • Saved commands, widget, app lock. No accounts or analytics.
 >
 > Try it without a Mac: install, tap **Try the demo**.
-> APK + source: <repository URL> (Apache-2.0)
+> APK + source: https://github.com/Javamomma/Herdr-Android (Apache-2.0)
 >
 > Not official, Herdr is Can's work and this just talks to herdr-core.
 > Feedback welcome, especially from other foldable and Android users!
