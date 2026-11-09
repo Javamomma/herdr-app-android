@@ -75,9 +75,9 @@ Apache-2.0.
 ## Next, in order
 
 1. Split into its own repo and ship 0.2.0 as a signed GitHub release.
-2. Answer buttons from the agent's options (1), card previews (2), instant
-   stale state (3).
-3. Tappable links and paths (4); update check (5); phrases (6).
+2. ~~All six ideas above~~: built in 0.2.0 (answer buttons, previews, instant
+   stale state, tappable links and paths, update check, phrases).
+3. Check them on the Fold; tune answer parsing for more agents.
 4. Space templates: start a space with a chosen program (e.g. TUIOS) from the
    New space dialog and saved commands.
 5. F-Droid listing; then Google Play.
@@ -92,3 +92,5 @@ Apache-2.0.
   no suggestions.
 - 2026-11-09: Claude leads engineering and communications; the founder sets
   direction (this file).
+- 2026-11-09: Other Claude sessions work through branches and pull requests
+  here (AGENTS.md); the TUIOS space comes in that way.

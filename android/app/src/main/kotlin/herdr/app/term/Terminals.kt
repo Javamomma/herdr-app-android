@@ -86,6 +86,18 @@ class TerminalController(context: Context, val address: String, private val sess
         onFont(px)
     }
 
+    /** A link tapped in the output: a web address opens in the browser, a file path in the Files panel. */
+    fun onLink(link: String) {
+        if (link.startsWith("http://") || link.startsWith("https://")) {
+            runCatching {
+                view.context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(link)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        } else {
+            session.onTerminalFocused(address)
+            session.requested = "file:$link"
+        }
+    }
+
     fun onSelection(text: String) {
         selection = text
     }

@@ -243,6 +243,18 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
         return idx to col
     }
 
+    /** A web address or a file path under the tap, on one row. */
+    private fun linkAt(x: Float, y: Float): String? = synchronized(emu) {
+        val (idx, col) = cellAt(x, y)
+        val line = emu.lineAt(idx) ?: return null
+        // One character per cell, so match positions are columns.
+        val text = buildString { for (c in 0 until minOf(emu.cols, line.capacity)) append(line.text(c)?.firstOrNull() ?: ' ') }
+        for (re in listOf(URL, PATH)) {
+            re.findAll(text).firstOrNull { col in it.range }?.let { return it.value.trimEnd('.', ',', ')', ']', ':', ';') }
+        }
+        null
+    }
+
     private fun screenCell(x: Float, y: Float): Pair<Int, Int> {
         val col = floor((x - pad) / cellW).toInt().coerceIn(0, emu.cols - 1)
         val row = floor((y - pad) / cellH).toInt().coerceIn(0, emu.rows - 1)
@@ -259,6 +271,11 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             if (selStart != null) {
                 clearSelection()
+                return true
+            }
+            linkAt(e.x, e.y)?.let {
+                playSoundEffect(android.view.SoundEffectConstants.CLICK)
+                term.onLink(it)
                 return true
             }
             showKeyboard()
@@ -511,6 +528,8 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
 
     private companion object {
         const val KeyCharacterMapCombining = android.view.KeyCharacterMap.COMBINING_ACCENT
+        val URL = Regex("""https?://[^\s<>"'`│]+""")
+        val PATH = Regex("""(?<![\w.~/])(?:~|\.{1,2})?/[\w.@-]+(?:/[\w.@-]+)*(?::\d+)?|\b[\w.@-]+(?:/[\w.@-]+)*\.(?:kt|kts|rs|ts|tsx|js|jsx|py|go|md|json|toml|yaml|yml|java|swift|c|h|cpp|sh|rb|css|html|txt|lock)(?::\d+)?\b""")
     }
 }
 

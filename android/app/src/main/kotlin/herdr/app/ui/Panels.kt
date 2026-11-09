@@ -84,7 +84,15 @@ private fun quote(s: String) = "'" + s.replace("'", "'\\''") + "'"
 @Composable
 private fun Files(session: Session, pool: TerminalPool, machine: String?, start: String, address: String?) {
     var dir by remember(start, machine) { mutableStateOf(start) }
-    var open by remember(dir) { mutableStateOf<String?>(null) }
+    var open by remember(start, machine) { mutableStateOf<String?>(null) }
+    // A path tapped in a terminal: relative ones start at the terminal's folder.
+    LaunchedEffect(session.fileToOpen) {
+        val f = session.fileToOpen ?: return@LaunchedEffect
+        session.fileToOpen = null
+        val path = f.substringBefore(':').let { p -> if (p.startsWith("/")) p else if (p.startsWith("~/") && session.home != null) session.home + p.substring(1) else join(start, p.removePrefix("./")) }
+        dir = path.substringBeforeLast('/').ifEmpty { "/" }
+        open = path
+    }
     var reload by remember { mutableIntStateOf(0) }
     var list by remember { mutableStateOf<Load<List<String>>>(Load.Busy) }
     LaunchedEffect(dir, machine, reload) {
@@ -119,7 +127,7 @@ private fun Files(session: Session, pool: TerminalPool, machine: String?, start:
                 Text(
                     (if (isDir) "▸ " else "  ") + e, color = if (isDir) Theme.text else Theme.dim, fontSize = 13.sp,
                     fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth().clickable { if (isDir) dir = join(dir, e.trimEnd('/')) else open = join(dir, e) }
+                    modifier = Modifier.fillMaxWidth().clickable { if (isDir) { dir = join(dir, e.trimEnd('/')); open = null } else open = join(dir, e) }
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                 )
             }

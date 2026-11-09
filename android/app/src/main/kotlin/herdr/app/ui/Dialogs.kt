@@ -132,6 +132,12 @@ fun SettingsDialog(session: Session, pool: TerminalPool, onDismiss: () -> Unit, 
         title = { Text("Settings") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                session.update?.let { (version, url) ->
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    androidx.compose.material3.Button(onClick = {
+                        context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Update to $version") }
+                }
                 val p = session.profile
                 Text("${p.user}@${p.host}:${p.port}", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
                 Text("herdr-core ${session.coreVersion.ifEmpty { "–" }} · ${session.terminals.size} live terminals", color = Theme.dim, fontSize = 12.sp)
