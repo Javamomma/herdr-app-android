@@ -69,6 +69,12 @@ sealed interface Conn {
     data class Failed(val message: String, val hostKey: UnknownHostKey? = null, val retrying: Boolean = false) : Conn
 }
 
+/** A saved command: typed into the focused terminal, or started in a new tab. */
+data class Snippet(val name: String, val command: String, val newTab: Boolean)
+
+/** What an agent's change of state says to the person. */
+enum class Alert { BLOCKED, DONE }
+
 data class MachineInfo(val name: String, val host: String, val temporary: Boolean)
 
 /** An agent: a live terminal whose program reports a status (OSC 7501). */
@@ -139,6 +145,35 @@ class Session(private val context: Context) {
     var ctrl by mutableStateOf(false)
     var alt by mutableStateOf(false)
 
+    private val settings = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    /** Keep the connection in the background and notify when an agent needs you. */
+    var alerts by mutableStateOf(settings.getBoolean("alerts", true))
+        private set
+    /** Ask for a fingerprint, face or the phone's PIN to open the app. */
+    var lockEnabled by mutableStateOf(settings.getBoolean("lock", false))
+        private set
+    /** Minutes in the background before the lock comes back. */
+    var lockAfterMinutes by mutableIntStateOf(settings.getInt("lockAfter", 5))
+        private set
+    /** On the cover screen, open to the agents list. */
+    var agentsWhenFolded by mutableStateOf(settings.getBoolean("agentsFolded", true))
+        private set
+    var snippets by mutableStateOf(loadSnippets())
+        private set
+    /** Running against the built-in pretend core (no Mac). */
+    var demo by mutableStateOf(false)
+        private set
+    /** Told about agents that start needing the person (notifications). */
+    var onAlert: ((Alert, Agent, String) -> Unit)? = null
+    /** Told when an agent no longer needs attention (clear its notification). */
+    var onSettled: ((String) -> Unit)? = null
+    /** Told about every change to the agents (the widget, the background service). */
+    var onAgents: ((List<Agent>) -> Unit)? = null
+    /** Asked to show a panel (files, changes) or the agents list, e.g. from a notification or the demo. */
+    var requested by mutableStateOf<String?>(null)
+    private val lastStates = HashMap<String, String>()
+    private var statesKnown = false
+
     private val docs = HashMap<String, DocSlot>()
     private val writeLocks = HashMap<String, Mutex>()
     private val writtenSeen = HashMap<String, Long>()
@@ -155,6 +190,30 @@ class Session(private val context: Context) {
     }
 
     private fun key(machine: String?) = machine ?: ""
+
+    fun setAlerts(on: Boolean) { alerts = on; settings.edit().putBoolean("alerts", on).apply(); onAgents?.invoke(agents()) }
+    fun setLock(on: Boolean) { lockEnabled = on; settings.edit().putBoolean("lock", on).apply() }
+    fun setLockAfter(minutes: Int) { lockAfterMinutes = minutes; settings.edit().putInt("lockAfter", minutes).apply() }
+    fun setAgentsWhenFolded(on: Boolean) { agentsWhenFolded = on; settings.edit().putBoolean("agentsFolded", on).apply() }
+
+    private fun loadSnippets(): List<Snippet> {
+        val saved = settings.getString("snippets", null) ?: return listOf(
+            Snippet("git status", "git status -sb", false),
+            Snippet("git log", "git log --oneline -15", false),
+            Snippet("Claude Code here", "claude", true),
+            Snippet("Run tests", "npm test", false),
+        )
+        return runCatching {
+            json.parseToJsonElement(saved).arr.mapNotNull { e ->
+                Snippet(e["name"].str ?: return@mapNotNull null, e["command"].str ?: return@mapNotNull null, e["newTab"].bool == true)
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveSnippets(list: List<Snippet>) {
+        snippets = list
+        settings.edit().putString("snippets", kotlinx.serialization.json.JsonArray(list.map { obj("name" to it.name, "command" to it.command, "newTab" to it.newTab) }).toString()).apply()
+    }
 
     fun saveProfile(p: Profile, password: String?) {
         p.save(context)
@@ -200,7 +259,26 @@ class Session(private val context: Context) {
         }
     }
 
+    /** Connects to the built-in pretend core: sample spaces and agents, nothing real. */
+    fun connectDemo() {
+        if (conn is Conn.Connecting || (conn is Conn.Connected && demo)) return
+        disconnect()
+        demo = true
+        wantConnected = false
+        conn = Conn.Connecting("Starting the demo…")
+        main.launch {
+            try {
+                val d = herdr.core.DemoCore()
+                val client = withContext(Dispatchers.IO) { CoreClient.connect(d.clientInput, d.clientOutput) { d.close() } }
+                start(client)
+            } catch (e: Exception) {
+                conn = Conn.Failed("The demo didn't start: ${e.message}")
+            }
+        }
+    }
+
     fun disconnect() {
+        demo = false
         wantConnected = false
         reconnect?.cancel()
         core?.close()
@@ -208,9 +286,31 @@ class Session(private val context: Context) {
         conn = Conn.Idle
     }
 
+    /**
+     * The phone's network changed (Wi-Fi to cellular, a hotel network). A
+     * dead connection would only be noticed by its 15-second keepalive: ask
+     * the core something at once, and reconnect now instead of waiting.
+     */
+    fun networkChanged() {
+        if (demo || !wantConnected) return
+        val c = core
+        if (c == null) {
+            if (conn !is Conn.Connecting) {
+                reconnect?.cancel()
+                conn = Conn.Idle
+                connect()
+            }
+            return
+        }
+        main.launch(Dispatchers.IO) {
+            runCatching { c.call("machine.list", timeoutMs = 5_000) }.onFailure { c.close() }
+        }
+    }
+
     /** The app came to the front or went away: reconnect when back. */
     fun setForeground(front: Boolean) {
         foreground = front
+        if (front) shareSeen()
         if (front && wantConnected && core == null && conn !is Conn.Connecting) {
             conn = Conn.Idle
             connect()
@@ -228,7 +328,7 @@ class Session(private val context: Context) {
                 if (c is Conn.Failed) conn = c.copy(retrying = true)
                 delay(wait)
                 wait = minOf(wait * 2, 30_000)
-                if (!foreground || conn is Conn.Connecting || core != null) continue
+                if ((!foreground && !alerts) || conn is Conn.Connecting || core != null) continue
                 conn = Conn.Idle
                 connect()
                 return@launch
@@ -301,6 +401,54 @@ class Session(private val context: Context) {
     private fun setTerminals(live: List<JsonObject>) {
         terminals = live.associateBy { it["address"].str ?: "" }
         shareSeen()
+        noticeAgents()
+    }
+
+    /**
+     * Alerts like the desktop's: an agent that starts blocking, or finishes
+     * a turn, while the person isn't looking at it. Changes already there
+     * when the app first connects aren't news.
+     */
+    private fun noticeAgents() {
+        val list = agents()
+        for (a in list) {
+            val prev = lastStates[a.address]
+            val looking = foreground && a.address in visible
+            if (statesKnown && prev != a.state && !looking) {
+                val where = spaces.firstOrNull { it.id == a.spaceId }?.let { spaceName(it) } ?: machineLabel(machineOf(a.address))
+                when {
+                    a.state == "blocked" -> onAlert?.invoke(Alert.BLOCKED, a, where)
+                    a.state == "done" && prev == "working" -> onAlert?.invoke(Alert.DONE, a, where)
+                }
+            }
+            if (a.state != "blocked" && a.state != "done") onSettled?.invoke(a.address)
+            if (looking) onSettled?.invoke(a.address)
+        }
+        for (gone in lastStates.keys - list.map { it.address }.toSet()) onSettled?.invoke(gone)
+        lastStates.clear()
+        list.forEach { lastStates[it.address] = it.state }
+        statesKnown = true
+        onAgents?.invoke(list)
+    }
+
+    /** Answers an agent from a notification: named keys (`enter`, `esc`), no screen needed. */
+    fun answerKeys(address: String, keys: List<String>) = attempt("Cannot answer") {
+        io { it.call("terminal.keys", obj("terminal" to address, "keys" to keys)) }
+    }
+
+    /** Types a reply to an agent (pasted, then Enter), even while it shows a dialog. */
+    fun answerText(address: String, text: String) = attempt("Cannot send") {
+        io { it.call("terminal.send", obj("terminal" to address, "text" to text, "force" to true)) }
+    }
+
+    /** Runs a saved command: typed into [address], or in a new tab of the shown space. */
+    fun runSnippet(s: Snippet, address: String?) = attempt("Cannot run ${s.name}") {
+        if (s.newTab || address == null) {
+            val space = activeSpace ?: return@attempt
+            newTab(space, Agents.launch(listOf("sh", "-c", s.command)), s.name)
+        } else {
+            io { it.call("terminal.send", obj("terminal" to address, "text" to s.command)) }
+        }
     }
 
     private suspend fun <T> io(f: (CoreClient) -> T): T {
@@ -460,7 +608,7 @@ class Session(private val context: Context) {
 
     fun tabName(s: Space, t: Tab): String = t.name.ifBlank { (s.tabs.indexOf(t) + 1).toString() }
 
-    fun machineLabel(machine: String?): String = machine ?: profile.host.substringBefore('.').ifEmpty { "Mac" }
+    fun machineLabel(machine: String?): String = machine ?: if (demo) "mac-mini (demo)" else profile.host.substringBefore('.').ifEmpty { "Mac" }
 
     fun agents(): List<Agent> = terminals.values.mapNotNull { t ->
         val status = t["status"].obj ?: return@mapNotNull null

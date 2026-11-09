@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Herdr</string>
+    <string name="widget_description">Your agents at a glance: blocked, done and working.</string>
 </resources>

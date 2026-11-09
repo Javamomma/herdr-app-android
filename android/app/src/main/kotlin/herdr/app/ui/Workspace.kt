@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.ViewColumn
 import androidx.compose.material.icons.filled.ViewStream
@@ -109,16 +110,18 @@ private val WIDE = 600.dp
 private val WIDER = 900.dp
 
 @Composable
-fun HerdrRoot(session: Session, pool: TerminalPool) {
+fun HerdrRoot(session: Session, pool: TerminalPool, locked: Boolean = false, onUnlock: () -> Unit = {}) {
     var editing by remember { mutableStateOf(false) }
     LaunchedEffect(session.generation, session.terminals) { pool.reattach() }
-    val showConnect = editing || !session.profile.ready ||
-        (session.spaces.isEmpty() && session.conn !is Conn.Connected)
+    val showConnect = editing || (!session.demo && (!session.profile.ready ||
+        (session.spaces.isEmpty() && session.conn !is Conn.Connected)))
     androidx.compose.material3.MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme(
         primary = Theme.accent, background = Theme.bg, surface = Theme.panel, onSurface = Theme.text, onBackground = Theme.text,
         surfaceVariant = Theme.raised, outline = Theme.border,
     )) {
-        if (showConnect) {
+        if (locked) {
+            LockScreen(onUnlock)
+        } else if (showConnect) {
             ConnectScreen(session, onDone = { editing = false })
         } else {
             Workspace(session, pool, onEditConnection = { editing = true })
@@ -138,6 +141,19 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
     var panel by remember { mutableStateOf<String?>(null) }
     var settings by remember { mutableStateOf(false) }
+    var snippetsOpen by remember { mutableStateOf(false) }
+    var agentsHome by remember { mutableStateOf(false) }
+    // Asked from a notification, the widget, the key bar or the demo.
+    LaunchedEffect(session.requested) {
+        when (session.requested) {
+            "files", "changes" -> panel = session.requested
+            "agents" -> agentsHome = true
+            "work" -> agentsHome = false
+            "settings" -> settings = true
+            "snippets" -> snippetsOpen = true
+        }
+        session.requested = null
+    }
 
     // What's on screen counts as seen (shared with the desktop as herdr.seen).
     val space = session.spaces.firstOrNull { it.id == session.activeSpace }
@@ -150,6 +166,11 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
     BoxWithConstraints(Modifier.fillMaxSize().background(Theme.bg).safeDrawingPadding()) {
         val wide = maxWidth >= WIDE
         val wider = maxWidth >= WIDER
+        // Folded: open to the agents list when there are agents to look at.
+        LaunchedEffect(wide) {
+            agentsHome = !wide && session.agentsWhenFolded && session.agents().any { it.state == "blocked" || it.state == "done" }
+        }
+        LaunchedEffect(session.peek, session.activeSpace) { if (session.peek != null) agentsHome = false }
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
         val sidebar: @Composable () -> Unit = {
@@ -166,6 +187,9 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
             Column(Modifier.fillMaxSize().imePadding()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (!wide) IconButton(onClick = { scope.launch { drawer.open() } }) { Icon(Icons.Default.Menu, "Spaces", tint = Theme.text) }
+                    if (!wide) IconButton(onClick = { agentsHome = !agentsHome }) {
+                        Icon(Icons.Default.SmartToy, "Agents", tint = if (agentsHome) Theme.accent else Theme.dim)
+                    }
                     Box(Modifier.weight(1f)) {
                         TabBar(session, space, wide, onRename = { dialog = DialogKind.RenameTab(it) }, onCustom = { dialog = DialogKind.Command(space?.id) })
                     }
@@ -175,7 +199,9 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
                 ConnectionBanner(session)
                 Row(Modifier.weight(1f)) {
                     Box(Modifier.weight(1f).fillMaxHeight()) {
-                        if (space == null || tab == null) {
+                        if (agentsHome && !wide) {
+                            AgentsHome(session, onOpen = { a -> session.showAgent(a); agentsHome = false })
+                        } else if (space == null || tab == null) {
                             Empty(session, onNewSpace = { dialog = DialogKind.NewSpace(null) })
                         } else {
                             TabView(session, pool, space, tab, wide)
@@ -213,6 +239,7 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
     }
 
     dialog?.let { Dialogs(session, it, onDismiss = { dialog = null }) }
+    if (snippetsOpen) SnippetsDialog(session, pool, onDismiss = { snippetsOpen = false })
     if (settings) SettingsDialog(session, pool, onDismiss = { settings = false }, onEditConnection = { settings = false; onEditConnection() })
 }
 
@@ -660,6 +687,7 @@ fun KeyBar(session: Session, pool: TerminalPool) {
         K("end") { target()?.key("end") }
         K("pgup") { target()?.key("pgup") }
         K("pgdn") { target()?.key("pgdn") }
+        K("⚡") { session.requested = "snippets" }
         K("paste") { clipboard.getText()?.text?.let { target()?.paste(it) } }
         K("type", composing) { if (address != null) session.composer[address] = !composing }
         K("A−") { pool.fontSize = (pool.fontSize - 1).coerceAtLeast(7); session.saveFont(pool.fontSize) }
@@ -693,5 +721,59 @@ private fun Composer(session: Session, address: String, target: () -> herdr.app.
             },
             modifier = Modifier.padding(bottom = 4.dp),
         ) { Text("Send") }
+    }
+}
+
+
+/** The cover screen's front page: every agent, the ones that need you first. */
+@Composable
+private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit) {
+    val agents = session.agents()
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        item {
+            val blocked = agents.count { it.state == "blocked" }
+            Text(
+                when {
+                    agents.isEmpty() -> "No agents running"
+                    blocked > 0 -> "$blocked waiting for you"
+                    else -> "${agents.size} agents"
+                },
+                color = Theme.text, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(4.dp, 4.dp, 4.dp, 12.dp),
+            )
+        }
+        items(agents, key = { it.address }) { a ->
+            val space = session.spaces.firstOrNull { it.id == a.spaceId }
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp).background(Theme.panel, RoundedCornerShape(10.dp))
+                    .border(1.dp, if (a.state == "blocked") Theme.stateColor("blocked").copy(alpha = 0.6f) else Theme.border, RoundedCornerShape(10.dp))
+                    .clickable { onOpen(a) }.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Dot(a.state, 10.dp)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(a.app + if (a.parent != null) " · worker" else "", color = Theme.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    Text(a.title.ifBlank { a.state }, color = Theme.dim, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(listOfNotNull(a.state, space?.let { session.spaceName(it) }).joinToString(" · "), color = Theme.stateColor(a.state), fontSize = 12.sp)
+                }
+                if (a.state == "blocked") {
+                    androidx.compose.material3.TextButton(onClick = { session.answerKeys(a.address, listOf("enter")) }) { Text("Allow") }
+                }
+            }
+        }
+    }
+}
+
+/** The app lock: nothing shows until the phone's owner unlocks it. */
+@Composable
+private fun LockScreen(onUnlock: () -> Unit) {
+    LaunchedEffect(Unit) { onUnlock() }
+    Column(
+        Modifier.fillMaxSize().background(Theme.bg).safeDrawingPadding(),
+        verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("Herdr is locked", color = Theme.text, fontSize = 20.sp)
+        Spacer(Modifier.height(16.dp))
+        androidx.compose.material3.Button(onClick = onUnlock) { Text("Unlock") }
     }
 }
