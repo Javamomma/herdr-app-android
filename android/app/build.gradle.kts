@@ -13,16 +13,29 @@ android {
         applicationId = "io.github.javamomma.herdr"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+    }
+
+    // Releases are signed with one key kept as repository secrets (RELEASING.md),
+    // so every release installs over the last. Without it, the debug key.
+    val keystore = System.getenv("HERDR_KEYSTORE")
+    signingConfigs {
+        if (keystore != null) {
+            create("release") {
+                storeFile = file(keystore)
+                storeType = "pkcs12"
+                storePassword = System.getenv("HERDR_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("HERDR_KEY_ALIAS") ?: "herdr"
+                keyPassword = System.getenv("HERDR_KEY_PASSWORD") ?: System.getenv("HERDR_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Signed with the debug key so CI's APK installs without a keystore;
-            // set up your own signing before publishing anywhere.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 
