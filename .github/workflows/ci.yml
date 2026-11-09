@@ -7,8 +7,10 @@ name: ci
 on:
   push:
     branches: [master]
-  # No paths-ignore here: CI is required to merge, so every PR needs it.
+    # This fork also carries the Android client; its own workflow tests it.
+    paths-ignore: ["android/**", ".github/workflows/android.yml"]
   pull_request:
+    paths-ignore: ["android/**", ".github/workflows/android.yml"]
 
 permissions:
   contents: read
