@@ -7,8 +7,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import java.io.InputStream
 import java.io.OutputStream
-import java.io.PipedInputStream
-import java.io.PipedOutputStream
 import java.util.Base64
 
 /**
@@ -21,8 +19,8 @@ class DemoCore {
     /** What the client reads (the core's output) and writes (the core's input). */
     val clientInput: InputStream
     val clientOutput: OutputStream
-    private val coreIn: PipedInputStream
-    private val coreOut: PipedOutputStream
+    private val coreIn: InputStream
+    private val coreOut: OutputStream
     private val lock = Any()
     private var seq = 10L
     private var nextChannel = 10
@@ -35,17 +33,17 @@ class DemoCore {
         private set
 
     init {
-        val toCore = PipedOutputStream()
-        coreIn = PipedInputStream(toCore, 1 shl 20)
-        val fromCore = PipedOutputStream()
-        clientInput = PipedInputStream(fromCore, 1 shl 20)
-        clientOutput = toCore
-        coreOut = fromCore
+        val toCore = MemoryPipe()
+        coreIn = toCore.input
+        clientOutput = toCore.output
+        val fromCore = MemoryPipe()
+        clientInput = fromCore.input
+        coreOut = fromCore.output
         seed()
         Thread(::serve, "demo-core").apply { isDaemon = true }.start()
         // A little life: Codex reaches a permission prompt a few seconds in.
         Thread({
-            Thread.sleep(8_000)
+            Thread.sleep(STORY_DELAY_MS)
             if (!closed) synchronized(lock) { setStatus("t4", "blocked", "Run the database migration?") }
         }, "demo-story").apply { isDaemon = true }.start()
     }
@@ -313,5 +311,58 @@ class DemoCore {
             "file.read" -> reply(id, obj("text" to "# Herdr for Android\n\nA demo file. In the real app this is read from your Mac.\n", "first" to 1, "last" to 3, "lines" to 3))
             else -> reply(id, obj())
         }
+    }
+}
+
+/** When, after the demo starts, Codex reaches its permission prompt. */
+const val STORY_DELAY_MS = 15_000L
+
+/**
+ * An in-memory byte pipe. Unlike java.io's piped streams it doesn't care
+ * which threads write: a writer thread ending doesn't break it, closing does.
+ */
+class MemoryPipe {
+    private val queue = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+    private var current: ByteArray = ByteArray(0)
+    private var at = 0
+    @Volatile private var closed = false
+    private val eof = ByteArray(0)
+
+    val output: OutputStream = object : OutputStream() {
+        override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            if (closed) throw java.io.IOException("pipe closed")
+            if (len > 0) queue.put(b.copyOfRange(off, off + len))
+        }
+        override fun close() {
+            closed = true
+            queue.put(eof)
+        }
+    }
+
+    val input: InputStream = object : InputStream() {
+        private fun fill(): Boolean {
+            while (at >= current.size) {
+                val next = queue.take()
+                if (next === eof) {
+                    queue.put(eof)
+                    return false
+                }
+                current = next
+                at = 0
+            }
+            return true
+        }
+        override fun read(): Int = if (fill()) current[at++].toInt() and 0xff else -1
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (len == 0) return 0
+            if (!fill()) return -1
+            val n = minOf(len, current.size - at)
+            System.arraycopy(current, at, b, off, n)
+            at += n
+            return n
+        }
+        override fun available(): Int = if (at < current.size) current.size - at else queue.peek()?.size ?: 0
+        override fun close() = output.close()
     }
 }

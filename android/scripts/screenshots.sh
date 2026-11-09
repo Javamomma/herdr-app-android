@@ -26,8 +26,8 @@ start
 shot 01-connect 4
 start --ez demo true
 shot 02-unfolded-workspace 7
-# Codex hits a permission prompt about 8 s into the demo: its notification.
-sleep 4
+# Codex hits a permission prompt 15 s into the demo: its notification.
+sleep 10
 adb shell cmd statusbar expand-notifications
 shot 03-notification 2
 adb shell cmd statusbar collapse

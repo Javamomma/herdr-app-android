@@ -45,6 +45,11 @@ class DemoCoreTest {
         assertTrue(gotEvent.await(5, TimeUnit.SECONDS), "writes announce a doc event")
         val addr = core.run(emptyList(), null, mapOf("herdr.space" to "sp2"), null, 80, 24, obj())
         assertTrue(addr.startsWith("t"))
+        // A thread that writes and ends (the demo's story) must not break the pipe.
+        Thread { demo.setStatus("t6", "working", "Again") }.apply { start(); join() }
+        Thread.sleep(200)
+        assertEquals("terminal.list", core.call("terminal.list").let { "terminal.list" })
+        assertTrue(!core.closed, "the connection survives a finished writer thread")
         core.close()
     }
 }

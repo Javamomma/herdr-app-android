@@ -147,10 +147,10 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
     LaunchedEffect(session.requested) {
         when (session.requested) {
             "files", "changes" -> panel = session.requested
-            "agents" -> agentsHome = true
-            "work" -> agentsHome = false
+            "agents" -> { panel = null; agentsHome = true }
+            "work" -> { panel = null; agentsHome = false }
             "settings" -> settings = true
-            "snippets" -> snippetsOpen = true
+            "snippets" -> { panel = null; snippetsOpen = true }
         }
         session.requested = null
     }
