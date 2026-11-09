@@ -397,10 +397,32 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
         invalidate()
     }
 
+    private val imm get() = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+
+    /**
+     * Brings up the keyboard for this terminal. After a fold the view still
+     * has focus, so focusing it again changes nothing and the input method
+     * stays bound to the old screen: reconnect it, then ask explicitly.
+     */
     fun showKeyboard() {
-        requestFocus()
-        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-        imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+        if (!hasFocus()) requestFocus()
+        if (!imm.isActive(this)) imm.restartInput(this)
+        post { imm.showSoftInput(this, 0) }
+    }
+
+    fun hideKeyboard() {
+        imm.hideSoftInputFromWindow(windowToken, 0)
+    }
+
+    /** Moved into another pane box, or onto the other screen of the fold: reconnect the keyboard. */
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (hasFocus()) imm.restartInput(this)
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration?) {
+        super.onConfigurationChanged(newConfig)
+        if (hasFocus()) imm.restartInput(this)
     }
 
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {

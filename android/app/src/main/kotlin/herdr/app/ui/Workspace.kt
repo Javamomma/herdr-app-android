@@ -622,6 +622,7 @@ private fun Peek(session: Session, pool: TerminalPool, address: String) {
  * composer: a normal text field (autocorrect, swipe, voice) whose message is
  * pasted and sent in one go. It opens by itself for agents.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun KeyBar(session: Session, pool: TerminalPool) {
     val clipboard = LocalClipboardManager.current
@@ -629,6 +630,7 @@ fun KeyBar(session: Session, pool: TerminalPool) {
     fun target() = pool.get(address)
     val isAgent = address != null && session.terminals[address]?.get("status")?.let { it !is kotlinx.serialization.json.JsonNull } == true
     val composing = address != null && (session.composer[address] ?: isAgent)
+    val imeVisible = androidx.compose.foundation.layout.WindowInsets.isImeVisible
     @Composable
     fun K(label: String, active: Boolean = false, onClick: () -> Unit) {
         Text(
@@ -639,8 +641,9 @@ fun KeyBar(session: Session, pool: TerminalPool) {
     }
     if (composing && address != null) Composer(session, address) { target() }
     Row(Modifier.fillMaxWidth().background(Theme.panel).horizontalScroll(rememberScrollState()).padding(4.dp)) {
-        K("type", composing) { if (address != null) session.composer[address] = !composing }
+        K("⌨", imeVisible) { target()?.toggleKeyboard(imeVisible) }
         K("esc") { target()?.key("esc") }
+        K("^C") { target()?.type("\u0003") }
         K("tab") { target()?.key("tab") }
         K("ctrl", session.ctrl) { session.ctrl = !session.ctrl }
         K("alt", session.alt) { session.alt = !session.alt }
@@ -656,7 +659,7 @@ fun KeyBar(session: Session, pool: TerminalPool) {
         K("pgup") { target()?.key("pgup") }
         K("pgdn") { target()?.key("pgdn") }
         K("paste") { clipboard.getText()?.text?.let { target()?.paste(it) } }
-        K("^C") { target()?.type("\u0003") }
+        K("type", composing) { if (address != null) session.composer[address] = !composing }
         K("A−") { pool.fontSize = (pool.fontSize - 1).coerceAtLeast(7); session.saveFont(pool.fontSize) }
         K("A+") { pool.fontSize = (pool.fontSize + 1).coerceAtMost(32); session.saveFont(pool.fontSize) }
     }
