@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -630,7 +632,7 @@ fun KeyBar(session: Session, pool: TerminalPool) {
     fun target() = pool.get(address)
     val isAgent = address != null && session.terminals[address]?.get("status")?.let { it !is kotlinx.serialization.json.JsonNull } == true
     val composing = address != null && (session.composer[address] ?: isAgent)
-    val imeVisible = androidx.compose.foundation.layout.WindowInsets.isImeVisible
+    val imeVisible = WindowInsets.isImeVisible
     @Composable
     fun K(label: String, active: Boolean = false, onClick: () -> Unit) {
         Text(
