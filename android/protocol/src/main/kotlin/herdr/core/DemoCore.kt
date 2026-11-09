@@ -315,7 +315,7 @@ class DemoCore {
                     argv.firstOrNull() == "ls" -> "app/\nprotocol/\nterminal/\nREADME.md\nbuild.gradle.kts\nsettings.gradle.kts\n"
                     argv.firstOrNull() == "git" && "status" in argv -> "## main...origin/main\n M app/src/main/kotlin/herdr/app/ui/Workspace.kt\n?? docs/demo.md\n"
                     argv.firstOrNull() == "git" && "diff" in argv -> "--- a/Workspace.kt\n+++ b/Workspace.kt\n@@ -642,3 +642,4 @@\n-        K(\"type\", composing)\n+        K(\"⌨\", imeVisible)\n         K(\"esc\")\n+        K(\"^C\")\n"
-                    argv.any { it.contains("herdr-has") } -> "herdr-has:claude\nherdr-has:codex\n"
+                    argv.any { it.contains("herdr-has") } -> "herdr-has:claude\nherdr-has:codex\nherdr-has:tuios\n"
                     argv.any { it.contains("HOME") } -> "/Users/you"
                     else -> ""
                 }

@@ -1,9 +1,10 @@
 package herdr.app
 
 /**
- * Coding agents the + menu can start, and the shell wrappers that find and
- * launch them in the Mac account's own login shell (ported from the desktop
- * app's src/remote_shell.rs, so PATH from .zprofile/.zshrc applies).
+ * Coding agents the + menu can start, full-screen programs a new space can
+ * start with, and the shell wrappers that find and launch them in the Mac
+ * account's own login shell (ported from the desktop app's
+ * src/remote_shell.rs, so PATH from .zprofile/.zshrc applies).
  */
 object Agents {
     data class Known(val name: String, val command: String)
@@ -19,7 +20,21 @@ object Agents {
         Known("Pi", "pi"),
     )
 
-    fun nameOf(command: String) = known.firstOrNull { it.command == command }?.name ?: command
+    /** Space templates: full-screen programs offered under "Start with" in New space, when on PATH. */
+    val programs = listOf(
+        Known("TUIOS", "tuios"),
+    )
+
+    /**
+     * How a program starts. TUIOS reattaches to the most recent session (a new
+     * one if there's none) instead of adding a session for every space.
+     */
+    fun argv(command: String): List<String> = when (command) {
+        "tuios" -> listOf("tuios", "attach")
+        else -> listOf(command)
+    }
+
+    fun nameOf(command: String) = (known + programs).firstOrNull { it.command == command }?.name ?: command
 
     fun check(commands: List<String>): List<String> {
         val posix = "for c; do unalias -- \"\$c\" 2>/dev/null; command -v \"\$c\" >/dev/null 2>&1 && printf 'herdr-has:%s\\n' \"\$c\"; done"

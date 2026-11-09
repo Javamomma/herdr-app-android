@@ -6,7 +6,7 @@ For any agent (Claude or otherwise) changing this app. Read
 ## Ground rules
 
 - **This repository is the only copy.** Work on a branch, open a pull request
-  to `master` with green CI. No changes kept only on a phone, a Mac or in a
+  to `main` with green CI. No changes kept only on a phone, a Mac or in a
   chat. The engineering lead (a Claude session) reviews and merges.
 - **Herdr 2, not herdr.** The app talks to **herdr-core** (`hc connect` over
   SSH, framed JSON-RPC: `protocol/`). It is not a client of the herdr terminal

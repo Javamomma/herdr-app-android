@@ -250,6 +250,7 @@ class Session(private val context: Context) {
             Snippet("git status", "git status -sb", false),
             Snippet("git log", "git log --oneline -15", false),
             Snippet("Claude Code here", "claude", true),
+            Snippet("TUIOS (new tab)", "tuios attach", true),
             Snippet("Run tests", "npm test", false),
         )
         return runCatching {
@@ -973,9 +974,12 @@ class Session(private val context: Context) {
     }
 
     /** Agents found on the Mac's PATH (login shell), for the + menu. */
-    suspend fun installedAgents(machine: String?): List<String> {
-        val candidates = Agents.known.map { it.command }
-        val out = runCatching { exec(machine, Agents.check(candidates), check = false) }.getOrDefault("")
-        return out.lines().mapNotNull { it.removePrefix("herdr-has:").takeIf { l -> l != it && l.isNotBlank() } }
+    suspend fun installedAgents(machine: String?): List<String> = installed(machine, Agents.known.map { it.command })
+
+    /** Which of [commands] are on [machine]'s PATH (login shell), in the order asked. */
+    suspend fun installed(machine: String?, commands: List<String>): List<String> {
+        val out = runCatching { exec(machine, Agents.check(commands), check = false) }.getOrDefault("")
+        val has = out.lines().mapNotNull { it.removePrefix("herdr-has:").takeIf { l -> l != it && l.isNotBlank() } }.toSet()
+        return commands.filter { it in has }
     }
 }

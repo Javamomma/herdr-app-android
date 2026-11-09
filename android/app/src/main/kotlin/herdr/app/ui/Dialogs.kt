@@ -52,7 +52,11 @@ fun Dialogs(session: Session, kind: DialogKind, onDismiss: () -> Unit) {
             var name by remember { mutableStateOf("") }
             var start by remember { mutableStateOf<String?>(null) }
             var found by remember(machine) { mutableStateOf<List<String>>(emptyList()) }
-            LaunchedEffect(machine) { found = runCatching { session.installedAgents(machine) }.getOrDefault(emptyList()) }
+            LaunchedEffect(machine) {
+                found = runCatching { session.installed(machine, (Agents.known + Agents.programs).map { it.command }) }.getOrDefault(emptyList())
+                if (start?.let { it !in found } == true) start = null
+            }
+            val program = Agents.programs.firstOrNull { it.command == start }
             AlertDialog(
                 onDismissRequest = onDismiss,
                 title = { Text("New space") },
@@ -66,7 +70,7 @@ fun Dialogs(session: Session, kind: DialogKind, onDismiss: () -> Unit) {
                             }
                         }
                         Field("Folder", folder, { folder = it }, if (machine == null) "~/src/project (empty: home)" else "empty: that machine's home", mono = false)
-                        Field("Name", name, { name = it }, "optional: follows its folder", mono = false)
+                        Field("Name", name, { name = it }, program?.let { "optional: ${it.name}" } ?: "optional: follows its folder", mono = false)
                         Text("Start with", color = Theme.dim, fontSize = 12.sp)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             FilterChip(selected = start == null, onClick = { start = null }, label = { Text("Terminal") })
@@ -77,7 +81,7 @@ fun Dialogs(session: Session, kind: DialogKind, onDismiss: () -> Unit) {
                 confirmButton = {
                     TextButton(onClick = {
                         val dir = folder.trim().let { f -> if (f.startsWith("~/") && machine == null) session.home?.let { it + f.substring(1) } ?: f else f }
-                        session.newSpace(machine, dir, name, start?.let { Agents.launch(listOf(it)) })
+                        session.newSpace(machine, dir, program?.let { name.ifBlank { it.name } } ?: name, start?.let { Agents.launch(Agents.argv(it)) })
                         onDismiss()
                     }) { Text("Create") }
                 },
