@@ -17,6 +17,11 @@ app closes.
 
 *Screenshots show the built-in demo (sample data, no Mac).*
 
+**Which Herdr?** This app is for **Herdr 2**, the desktop app and its
+herdr-core (`hc`). If you run **herdr**, the terminal agent multiplexer, look
+at the apps made for its socket API, such as
+[Herdr Mobile](https://github.com/tuan3w/herdr-mobile).
+
 > Not made by or affiliated with the Herdr project. Herdr and herdr-core are
 > theirs; this app speaks herdr-core's public protocol.
 
