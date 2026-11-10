@@ -40,6 +40,17 @@ New logic that doesn't need Android goes in `protocol/` or `terminal/` with a
 test. UI changes: make sure the demo still shows them (`DemoCore`), since CI
 takes screenshots of the demo on Fold-sized screens (`scripts/screenshots.sh`).
 
+## Verify
+
+Base branch: master
+
+```sh
+cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew --no-daemon :protocol:test :terminal:test
+```
+
+The Mac mini has JDK 21 from Homebrew but no Android SDK; the APK build is
+checked by the `android` GitHub Actions workflow.
+
 ## Report back
 
 In the pull request description:
