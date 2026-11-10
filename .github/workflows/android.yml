@@ -32,9 +32,6 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v5
-        with:
-          # the Gradle build is in android/, not at the repository root
-          build-root-directory: android
       - name: Test the core client and terminal engine, build the APK
         run: ./gradlew --no-daemon :protocol:test :terminal:test :app:assembleDebug
       - uses: actions/upload-artifact@v5
