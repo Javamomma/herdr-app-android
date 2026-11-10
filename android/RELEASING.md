@@ -1,5 +1,7 @@
 # Releasing
 
+**Releases are paused: there is no public release and no release workflow in this repository for now.**
+
 Releases are APKs on GitHub Releases, signed with one project key so each
 installs over the last.
 

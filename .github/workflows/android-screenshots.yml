@@ -1,7 +1,8 @@
-# Screenshots of the demo on an emulator sized like a Galaxy Z Fold 7, then
-# the safety checks (scripts/safety-check.sh) on the same emulator.
-# Run by hand from the Actions tab; the PNGs land in the run's artifacts.
-name: screenshots
+# Screenshots of the Android client's demo on an emulator sized like a Galaxy
+# Z Fold 7, then the safety checks (android/scripts/safety-check.sh) on the
+# same emulator. Run by hand from the Actions tab; the PNGs land in the run's
+# artifacts.
+name: android-screenshots
 
 on:
   workflow_dispatch:
@@ -13,8 +14,11 @@ jobs:
   screenshots:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: android
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-java@v5
@@ -22,6 +26,8 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v5
+        with:
+          build-root-directory: android
       - name: Build the APK
         run: ./gradlew --no-daemon :app:assembleDebug && mkdir -p apk && cp app/build/outputs/apk/debug/app-debug.apk apk/
       - name: Enable KVM
@@ -36,6 +42,7 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          working-directory: android
           script: |
             ./scripts/screenshots.sh apk/app-debug.apk screenshots
             ./scripts/safety-check.sh screenshots
@@ -43,5 +50,5 @@ jobs:
         if: always()
         with:
           name: herdr-android-screenshots
-          path: screenshots/
+          path: android/screenshots/
           if-no-files-found: error
