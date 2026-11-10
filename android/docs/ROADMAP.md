@@ -20,15 +20,16 @@ exact steps.
 
 ## Process
 
-- **One source of truth: this repository.** All work lands through a branch
+- **One source of truth: this repository** (the `android/` folder of
+  Javamomma/herdr-app-android). All work lands through a branch
   and a pull request with green CI. Work done in another Claude session (on
   the phone, the Mac or the web) goes on its own branch and PR here, never as
   a loose copy; Claude reviews and merges it.
 - **Tests first where they're cheap:** the protocol and terminal engine are
   plain Kotlin with JVM tests; the app is checked by building and by the demo
   screenshots on Fold-sized emulators.
-- **Releases** are tags (`vX.Y.Z`) with a CHANGELOG section; CI signs and
-  publishes them. Test builds share one debug key and install over each other.
+- **Releases** are tags (`vX.Y.Z`) with a CHANGELOG section; releases are
+  paused for now (see RELEASING.md). Test builds share one debug key and install over each other.
 - **Commits:** lowercase conventional commits, one line.
 
 ## Where we stand (0.2.0)
@@ -74,8 +75,9 @@ Apache-2.0.
 
 ## Next, in order
 
-1. ~~Split into its own repo~~ (github.com/Javamomma/Herdr-Android, history
-   kept); ship 0.2.0 as a signed GitHub release.
+1. ~~Split into its own repo~~ (undone 2026-11-10: back in `android/` of
+   github.com/Javamomma/herdr-app-android, history kept). Releases are paused;
+   there is no public release for now.
 2. ~~All six ideas above~~: built in 0.2.0 (answer buttons, previews, instant
    stale state, tappable links and paths, update check, phrases).
 3. Check them on the Fold; tune answer parsing for more agents.
@@ -97,3 +99,6 @@ Apache-2.0.
   here (AGENTS.md); the TUIOS space comes in that way.
 - 2026-11-09: The app moved to its own repository, Javamomma/Herdr-Android,
   from the `android/` folder of the herdr-app fork (history kept).
+- 2026-11-10: That repository is retired; the app is back in the `android/`
+  folder of Javamomma/herdr-app-android, the only home. Pull requests go to
+  `master`. Releases are paused.

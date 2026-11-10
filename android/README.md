@@ -54,11 +54,11 @@ desktop's renderer). Mod panes show as placeholders.
 
 ## Install
 
-1. On the phone, open the [latest release](../../releases/latest) and download
+1. On the phone, open the [latest release](https://github.com/Javamomma/herdr-app-android/releases/latest) and download
    `herdr-android-<version>.apk`.
 2. Open it and allow installing from your browser when Android asks.
 
-To get updates automatically, add this repository's URL to
+To get updates automatically, add https://github.com/Javamomma/herdr-app-android to
 [Obtainium](https://github.com/ImranR98/Obtainium).
 
 Want to look first? On the connect screen, tap **Try the demo**.
@@ -120,7 +120,8 @@ JDK 17 and the Android SDK (API 35).
 - `terminal/`: the VT/xterm engine, tested with split, garbage and oversized input.
 - `app/`: the Android app (Jetpack Compose; a Canvas view for terminals).
 
-Releases: [RELEASING.md](RELEASING.md).
+Releases are paused: [RELEASING.md](RELEASING.md). This app lives in the
+`android/` folder of [Javamomma/herdr-app-android](https://github.com/Javamomma/herdr-app-android).
 
 ## Credits and license
 
