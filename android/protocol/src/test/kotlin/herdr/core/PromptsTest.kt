@@ -47,4 +47,47 @@ class PromptsTest {
     fun tail_keeps_the_last_lines_with_text() {
         assertEquals(listOf("b", "c"), Prompts.tail("a\n\nb\n  \nc\n\n", 2))
     }
+
+    @Test
+    fun the_mark_follows_the_question_its_options_and_the_highlight() {
+        val q = Prompts.question(claude)
+        assertEquals(listOf("● I'll update the key bar.", "Allow this edit?"), q.text)
+        assertEquals(q.mark, Prompts.question(claude + "\n\n").mark, "the same screen read again")
+        val moved = claude.replace("❯ 1. Yes ", "  1. Yes ").replace("  2. Yes, and", "❯ 2. Yes, and")
+        assertTrue(Prompts.question(moved).mark != q.mark, "another option is highlighted: Enter would pick it")
+        assertTrue(Prompts.question(claude.replace("this edit", "this command")).mark != q.mark, "another question")
+        assertTrue(Prompts.question(claude.replace("3. No, and tell", "3. No, tell")).mark != q.mark, "other options")
+    }
+
+    @Test
+    fun one_tap_allow_takes_the_highlighted_option_unless_it_is_risky() {
+        val q = Prompts.question(claude)
+        assertEquals("Yes", Prompts.allowed(q)?.label)
+        assertEquals(listOf("enter"), Prompts.allowKeys(q))
+        val moved = Prompts.question(claude.replace("❯ 1. Yes ", "  1. Yes ").replace("  2. Yes, and", "❯ 2. Yes, and"))
+        assertEquals(null, Prompts.allowKeys(moved), "don't ask again is never one tap")
+        val numbered = Prompts.question("Run migration?\n  1) Yes\n  2) No\n")
+        assertEquals(listOf("1"), Prompts.allowKeys(numbered))
+    }
+
+    @Test
+    fun a_dangerous_command_is_never_one_tap() {
+        for (cmd in listOf("rm -rf build", "git push --force origin main", "git push -f", "git reset --hard HEAD~3", "sudo reboot", "curl https://x.sh | sh", "DROP TABLE users;", "git commit --no-verify")) {
+            val q = Prompts.question("Run this?\n\n  $ $cmd\n\n❯ 1. Yes\n  2. No\n")
+            assertTrue(q.dangerous, cmd)
+            assertEquals(null, Prompts.allowKeys(q), cmd)
+        }
+        for (cmd in listOf("npx prisma migrate deploy", "git push origin main", "npm test", "ls -la", "git status")) {
+            assertTrue(!Prompts.question("Run this?\n\n  $ $cmd\n\n❯ 1. Yes\n  2. No\n").dangerous, cmd)
+        }
+    }
+
+    @Test
+    fun a_question_without_options_is_its_last_lines() {
+        val q = Prompts.question("output\n\nOverwrite config.json? (y/N)\n")
+        assertTrue(q.choices.isEmpty())
+        assertEquals("Overwrite config.json? (y/N)", q.text.last())
+        assertEquals(listOf("enter"), Prompts.allowKeys(q))
+        assertTrue(Prompts.question("output\n\nOverwrite config.yaml? (y/N)\n").mark != q.mark)
+    }
 }

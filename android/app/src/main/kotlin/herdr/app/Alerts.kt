@@ -1,6 +1,7 @@
 package herdr.app
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -22,14 +23,23 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.RemoteInput
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import herdr.core.Prompts
+import herdr.core.Question
 
 /**
  * Phone notifications for agents: one per agent that is blocked or just
- * finished, with Allow / Deny (Enter / Esc) and an inline Reply for a
- * blocked one. Tapping opens the app on that agent.
+ * finished. A blocked one shows the question read from the agent's screen,
+ * with Allow, Deny and an inline Reply that only work on an unlocked phone
+ * and only while the agent still shows that question. On the lock screen,
+ * and whenever the app lock is on, a notification says no more than that an
+ * agent needs you. Tapping opens the app on that agent.
  */
 class Notifier(private val context: Context) {
     private val manager = NotificationManagerCompat.from(context)
+
+    /** What an agent's notification shows, to put it back as it was. */
+    private class Shown(val kind: Alert, val agent: Agent, val where: String, val question: Question?)
+    private val shown = HashMap<String, Shown>()
 
     init {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -50,49 +60,109 @@ class Notifier(private val context: Context) {
         return PendingIntent.getActivity(context, address?.hashCode() ?: 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
-    private fun action(address: String, what: String, mutable: Boolean = false): PendingIntent {
-        val intent = Intent(context, AgentActionReceiver::class.java).setAction(what).putExtra(EXTRA_AGENT, address)
-        val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (mutable) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
-        return PendingIntent.getBroadcast(context, (address + what).hashCode(), intent, flags)
+    /** A button on the notification. Android asks for the phone to be unlocked before it runs (12 and later). */
+    private fun button(label: String, address: String, what: String, mark: String, input: RemoteInput? = null): NotificationCompat.Action {
+        val intent = Intent(context, AgentActionReceiver::class.java).setAction(what).putExtra(EXTRA_AGENT, address).putExtra(EXTRA_MARK, mark)
+        // The reply's text is added to the intent by Android, so that one must be mutable.
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (input != null) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
+        val pending = PendingIntent.getBroadcast(context, (address + what).hashCode(), intent, flags)
+        val b = NotificationCompat.Action.Builder(0, label, pending).setAuthenticationRequired(true)
+        // No "Yes" / "No" chips made up by Android: a reply is only what the person typed.
+        if (input != null) b.addRemoteInput(input).setAllowGeneratedReplies(false)
+        return b.build()
     }
 
-    fun alert(kind: Alert, agent: Agent, where: String) {
+    /** All a locked phone, or an app with its lock on, says. */
+    private fun discreet(kind: Alert, address: String) = NotificationCompat.Builder(context, AGENTS)
+        .setSmallIcon(R.drawable.ic_stat_agent)
+        .setContentTitle(if (kind == Alert.BLOCKED) "An agent needs you" else "An agent finished")
+        .setContentText("Open Herdr to see")
+        .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setContentIntent(open(address))
+        .setAutoCancel(true)
+
+    /**
+     * Shows an agent's notification. [question] is what its screen asks (a
+     * blocked agent); [hidden] when the app lock is on; [quiet] to change
+     * one already showing without sounding again.
+     */
+    fun alert(kind: Alert, agent: Agent, where: String, question: Question?, hidden: Boolean, quiet: Boolean = false) {
         if (!allowed(context)) return
-        val title = when (kind) {
-            Alert.BLOCKED -> "${agent.app} needs you · $where"
-            Alert.DONE -> "${agent.app} finished · $where"
-        }
-        val b = NotificationCompat.Builder(context, AGENTS)
-            .setSmallIcon(R.drawable.ic_stat_agent)
-            .setContentTitle(title)
-            .setContentText(agent.title.ifBlank { if (kind == Alert.BLOCKED) "Waiting for your answer" else "Ready for you" })
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(open(agent.address))
-            .setAutoCancel(true)
-            .setOnlyAlertOnce(false)
-        if (kind == Alert.BLOCKED) {
-            b.addAction(0, "Allow", action(agent.address, ACTION_ALLOW))
-            b.addAction(0, "Deny", action(agent.address, ACTION_DENY))
-            val input = RemoteInput.Builder(KEY_REPLY).setLabel("Reply to ${agent.app}").build()
-            b.addAction(NotificationCompat.Action.Builder(0, "Reply", action(agent.address, ACTION_REPLY, mutable = true)).addRemoteInput(input).build())
+        shown[agent.address] = Shown(kind, agent, where, question)
+        val b = discreet(kind, agent.address).setOnlyAlertOnce(quiet)
+        if (!hidden) {
+            b.setContentTitle(if (kind == Alert.BLOCKED) "${agent.app} needs you · $where" else "${agent.app} finished · $where")
+            b.setContentText(agent.title.ifBlank { if (kind == Alert.BLOCKED) "Waiting for your answer" else "Ready for you" })
+            b.setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            b.setPublicVersion(discreet(kind, agent.address).build())
+            if (kind == Alert.BLOCKED && question != null) {
+                val lines = question.text.takeLast(5) + question.choices.map { "${if (it.selected) "❯" else "  "} ${it.number}. ${it.label}" }
+                if (lines.isNotEmpty()) b.setStyle(NotificationCompat.BigTextStyle().bigText(lines.joinToString("\n")))
+                val address = agent.address
+                if (Prompts.allowKeys(question) != null) {
+                    val label = Prompts.allowed(question)?.label?.let { if (it.length > 18) it.take(17) + "…" else it } ?: "Allow"
+                    b.addAction(button(label, address, ACTION_ALLOW, question.mark))
+                } else {
+                    b.setSubText("Answer in the app")
+                }
+                b.addAction(button("Deny", address, ACTION_DENY, question.mark))
+                val input = RemoteInput.Builder(KEY_REPLY).setLabel("Reply to ${agent.app}").build()
+                b.addAction(button("Reply", address, ACTION_REPLY, question.mark, input))
+            }
         }
         runCatching { manager.notify(id(agent.address), b.build()) }
     }
 
-    fun settle(address: String) = manager.cancel(id(address))
+    /** Puts an agent's notification back as it was (an answer tapped that couldn't be taken). */
+    fun restore(address: String, hidden: Boolean) {
+        shown[address]?.let { alert(it.kind, it.agent, it.where, it.question, hidden, quiet = true) }
+    }
 
-    /** The quiet ongoing notification a foreground service needs. */
-    fun watching(host: String, agents: List<Agent>): Notification {
+    fun showing(address: String) = address in shown
+
+    /** An answer that was not sent: says so, in the place of the agent's notification. */
+    fun problem(address: String, title: String, text: String) {
+        if (!allowed(context)) return
+        shown.remove(address)
+        val b = NotificationCompat.Builder(context, AGENTS)
+            .setSmallIcon(R.drawable.ic_stat_agent)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(open(address))
+            .setAutoCancel(true)
+        runCatching { manager.notify(id(address), b.build()) }
+    }
+
+    fun settle(address: String) {
+        shown.remove(address)
+        manager.cancel(id(address))
+    }
+
+    /** Takes down every agent notification (the app lock was turned on or off: they'd show the wrong amount). */
+    fun settleAll() {
+        for (address in shown.keys.toList()) settle(address)
+    }
+
+    /** The quiet ongoing notification a foreground service needs: what it says is whether it is really watching. */
+    fun watching(host: String, agents: List<Agent>, conn: Conn): Notification {
         val blocked = agents.count { it.state == "blocked" }
         val working = agents.count { it.state == "working" }
-        val text = listOfNotNull(
+        val counts = listOfNotNull(
             if (blocked > 0) "$blocked blocked" else null,
             if (working > 0) "$working working" else null,
         ).joinToString(" · ").ifEmpty { "No agents running" }
+        val (title, text) = when (conn) {
+            Conn.Connected -> "Watching agents on $host" to counts
+            is Conn.Connecting -> "Connecting to $host…" to "Agents can't reach you until it connects."
+            else -> "Not connected to $host" to "Agents can't reach you. Tap to open Herdr."
+        }
         return NotificationCompat.Builder(context, WATCH)
             .setSmallIcon(R.drawable.ic_stat_agent)
-            .setContentTitle("Watching agents on $host")
+            .setContentTitle(title)
             .setContentText(text)
             .setOngoing(true)
             .setSilent(true)
@@ -104,6 +174,7 @@ class Notifier(private val context: Context) {
         const val AGENTS = "agents"
         const val WATCH = "watch"
         const val EXTRA_AGENT = "herdr.agent"
+        const val EXTRA_MARK = "herdr.mark"
         const val ACTION_ALLOW = "herdr.allow"
         const val ACTION_DENY = "herdr.deny"
         const val ACTION_REPLY = "herdr.reply"
@@ -115,20 +186,24 @@ class Notifier(private val context: Context) {
     }
 }
 
-/** Allow (Enter), Deny (Esc) and Reply, straight from the notification. */
+/** Allow, Deny and Reply, straight from the notification. */
 class AgentActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext as HerdrApplication
         val address = intent.getStringExtra(Notifier.EXTRA_AGENT) ?: return
-        when (intent.action) {
-            Notifier.ACTION_ALLOW -> app.session.answerKeys(address, listOf("enter"))
-            Notifier.ACTION_DENY -> app.session.answerKeys(address, listOf("esc"))
-            Notifier.ACTION_REPLY -> {
-                val text = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(Notifier.KEY_REPLY)?.toString()
-                if (!text.isNullOrBlank()) app.session.answerText(address, text)
-            }
+        val mark = intent.getStringExtra(Notifier.EXTRA_MARK) ?: return
+        val what = intent.action ?: return
+        val reply = if (what == Notifier.ACTION_REPLY) RemoteInput.getResultsFromIntent(intent)?.getCharSequence(Notifier.KEY_REPLY)?.toString() else null
+        // Never from a locked phone (Android 12 and later ask to unlock first;
+        // this covers the phones before it), and never past the app's own lock.
+        val locked = context.getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true
+        if (locked || app.session.lockEnabled || (what == Notifier.ACTION_REPLY && reply.isNullOrBlank())) {
+            app.notifier.restore(address, app.session.lockEnabled)
+            return
         }
-        app.notifier.settle(address)
+        // The answer is checked against the agent's screen and sent while this broadcast is held open.
+        val pending = goAsync()
+        app.answer(address, mark, deny = what == Notifier.ACTION_DENY, reply = reply) { pending.finish() }
     }
 }
 
@@ -141,13 +216,28 @@ class WatchService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val app = application as HerdrApplication
-        val note = app.notifier.watching(app.session.machineLabel(null), app.session.agents())
+        val note = app.notifier.watching(app.session.machineLabel(null), app.session.agents(), app.session.conn)
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
-        runCatching { ServiceCompat.startForeground(this, Notifier.WATCH_ID, note, type) }.onFailure { stopSelf() }
+        try {
+            ServiceCompat.startForeground(this, Notifier.WATCH_ID, note, type)
+        } catch (e: Exception) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        app.watching(true)
+        // Android may have ended the app and started only this service again:
+        // nothing is connected then, so connect, or the notification would lie.
+        app.session.resume()
         return START_STICKY
     }
 
+    override fun onDestroy() {
+        (application as HerdrApplication).watching(false)
+        super.onDestroy()
+    }
+
     companion object {
+        /** Asks for the service; it reports back itself once it runs (Android may refuse from the background). */
         fun start(context: Context) {
             runCatching { ContextCompat.startForegroundService(context, Intent(context, WatchService::class.java)) }
         }
@@ -156,9 +246,9 @@ class WatchService : Service() {
             context.stopService(Intent(context, WatchService::class.java))
         }
 
-        fun update(context: Context, host: String, agents: List<Agent>, notifier: Notifier) {
+        fun update(context: Context, host: String, agents: List<Agent>, conn: Conn, notifier: Notifier) {
             if (!Notifier.allowed(context)) return
-            runCatching { NotificationManagerCompat.from(context).notify(Notifier.WATCH_ID, notifier.watching(host, agents)) }
+            runCatching { NotificationManagerCompat.from(context).notify(Notifier.WATCH_ID, notifier.watching(host, agents, conn)) }
         }
     }
 }
@@ -167,11 +257,12 @@ class WatchService : Service() {
 class AgentsWidget : AppWidgetProvider() {
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
         val app = context.applicationContext as HerdrApplication
-        render(context, app.session.agents(), app.session.conn is Conn.Connected)
+        render(context, app.session.agents(), app.session.conn is Conn.Connected, app.session.lockEnabled)
     }
 
     companion object {
-        fun render(context: Context, agents: List<Agent>, connected: Boolean) {
+        /** [hidden]: the app lock is on, so counts only, no agent's name or title. */
+        fun render(context: Context, agents: List<Agent>, connected: Boolean, hidden: Boolean) {
             val manager = AppWidgetManager.getInstance(context)
             val ids = manager.getAppWidgetIds(ComponentName(context, AgentsWidget::class.java))
             if (ids.isEmpty()) return
@@ -183,6 +274,7 @@ class AgentsWidget : AppWidgetProvider() {
             val top = agents.firstOrNull { it.state == "blocked" } ?: agents.firstOrNull { it.state == "done" }
             views.setTextViewText(R.id.detail, when {
                 !connected -> "Not connected"
+                top != null && hidden -> "Open Herdr to see"
                 top != null -> "${top.app}: ${top.title.ifBlank { top.state }}"
                 else -> "All quiet"
             })

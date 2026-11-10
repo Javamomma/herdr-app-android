@@ -3,8 +3,11 @@
 ## [0.2.0] - 2026-11-09
 
 ### New
-- Notifications when an agent needs you or finishes, with Allow, Deny and Reply.
-- App lock with fingerprint, face or PIN.
+- Notifications when an agent needs you or finishes. A blocked agent's notification shows its question, with Allow, Deny and Reply.
+- Answers from a notification need the phone unlocked, and are sent only while the agent still shows the question you saw. If an answer can't be sent, a notification tells you.
+- A command that can't be taken back (a force push, `rm -rf`) is never a one-tap Allow: answer it in the app.
+- App lock with fingerprint, face or PIN. With it on, notifications and the widget name no agent, notifications have no buttons, and the recent-apps view shows no picture of your terminals.
+- Closing a pane or tab asks first when an agent or program is running in it.
 - Folded, the cover screen opens on your agents; a home-screen widget shows blocked, done and working.
 - Saved commands (⚡ on the key bar): type one into the terminal or start it in a new tab.
 - Try the demo from the connect screen, no Mac needed.
@@ -19,6 +22,8 @@
 - New space can start with TUIOS when it's installed on that machine; it reattaches to your last TUIOS session.
 
 ### Fixed
+- The "Watching agents" notification could stay up with nothing connected after Android restarted the app in the background. It now reconnects, and says so when it isn't connected.
+- Disconnecting while a connection was still being made could connect anyway.
 - The keyboard came back only after switching tabs when you folded or unfolded the phone.
 
 ## [0.1.0] - 2026-11-07

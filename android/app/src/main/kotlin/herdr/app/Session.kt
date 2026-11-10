@@ -35,6 +35,7 @@ import herdr.core.machineOf
 import herdr.core.mismatch
 import herdr.core.newTab
 import herdr.core.Prompts
+import herdr.core.Question
 import herdr.core.obj
 import herdr.core.panes
 import herdr.core.parseDocument
@@ -54,6 +55,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -72,6 +74,21 @@ sealed interface Conn {
 
 /** A saved command: typed into the focused terminal, or started in a new tab. */
 data class Snippet(val name: String, val command: String, val newTab: Boolean)
+
+/** What became of an answer given to an agent's question. */
+sealed interface Answered {
+    data object Sent : Answered
+    /** The agent shows another question now: nothing was sent. */
+    data object Changed : Answered
+    /** The agent isn't waiting any more (answered elsewhere, or gone). */
+    data object Moot : Answered
+    /** No connection to the Mac. */
+    data object Offline : Answered
+    data class Failed(val why: String) : Answered
+}
+
+/** A close that needs a yes first: what it says, and what to do on yes. */
+class Closing(val title: String, val text: String, val confirm: String, val run: () -> Unit)
 
 /** What an agent's change of state says to the person. */
 enum class Alert { BLOCKED, DONE }
@@ -113,8 +130,15 @@ class Session(private val context: Context) {
 
     var profile by mutableStateOf(Profile.load(context))
         private set
-    var conn by mutableStateOf<Conn>(Conn.Idle)
-        private set
+    private val connState = mutableStateOf<Conn>(Conn.Idle)
+    var conn: Conn
+        get() = connState.value
+        private set(v) {
+            connState.value = v
+            onConn?.invoke(v)
+        }
+    /** Told when the connection's state changes (the background service's status line). */
+    var onConn: ((Conn) -> Unit)? = null
     var core: CoreClient? = null
         private set
     /** Rises with every new connection: terminal views reattach. */
@@ -170,6 +194,10 @@ class Session(private val context: Context) {
     var onSettled: ((String) -> Unit)? = null
     /** Told about every change to the agents (the widget, the background service). */
     var onAgents: ((List<Agent>) -> Unit)? = null
+    /** Told when the app lock is turned on or off (what notifications and the widget may show). */
+    var onLock: ((Boolean) -> Unit)? = null
+    /** A close waiting for a yes, because it would end something that is running. */
+    var closing by mutableStateOf<Closing?>(null)
     /** Asked to show a panel (files, changes) or the agents list, e.g. from a notification or the demo. */
     var requested by mutableStateOf<String?>(null)
     /** Each agent's screen text as last read (previews, and the answers it offers). */
@@ -194,6 +222,8 @@ class Session(private val context: Context) {
     private val writeLocks = HashMap<String, Mutex>()
     private val writtenSeen = HashMap<String, Long>()
     private var reconnect: Job? = null
+    /** Rises with every connect and disconnect: an attempt that is no longer the latest gives up. */
+    private var connecting = 0
     private var foreground = true
     var wantConnected = false
         private set
@@ -241,7 +271,7 @@ class Session(private val context: Context) {
     private fun key(machine: String?) = machine ?: ""
 
     fun updateAlerts(on: Boolean) { alerts = on; settings.edit().putBoolean("alerts", on).apply(); onAgents?.invoke(agents()) }
-    fun updateLock(on: Boolean) { lockEnabled = on; settings.edit().putBoolean("lock", on).apply() }
+    fun updateLock(on: Boolean) { lockEnabled = on; settings.edit().putBoolean("lock", on).apply(); onLock?.invoke(on) }
     fun updateLockAfter(minutes: Int) { lockAfterMinutes = minutes; settings.edit().putInt("lockAfter", minutes).apply() }
     fun updateAgentsWhenFolded(on: Boolean) { agentsWhenFolded = on; settings.edit().putBoolean("agentsFolded", on).apply() }
 
@@ -277,14 +307,16 @@ class Session(private val context: Context) {
         if (conn is Conn.Connecting || conn is Conn.Connected) return
         if (!profile.ready) return
         wantConnected = true
+        if (!settings.getBoolean("connected", false)) settings.edit().putBoolean("connected", true).apply()
         reconnect?.cancel()
         conn = Conn.Connecting("Connecting to ${profile.host}…")
         val p = profile
+        val mine = ++connecting
         main.launch {
             try {
                 val client = withContext(Dispatchers.IO) {
                     val link = SshLink.open(p, known, deviceKey, secrets.get("password"), acceptFingerprint)
-                    withContext(Dispatchers.Main) { conn = Conn.Connecting("Starting hc connect on the Mac…") }
+                    withContext(Dispatchers.Main) { if (mine == connecting) conn = Conn.Connecting("Starting hc connect on the Mac…") }
                     try {
                         CoreClient.connect(link.input, link.output) { link.close() }
                     } catch (e: Exception) {
@@ -294,15 +326,21 @@ class Session(private val context: Context) {
                         throw IllegalStateException(e.message + if (err.isNotEmpty()) "\n\n$err" else "")
                     }
                 }
+                // Disconnected (or the demo started) while this was on its way: drop it.
+                if (mine != connecting) {
+                    client.close()
+                    return@launch
+                }
                 mismatch(client.hello)?.let {
                     client.close()
                     throw IllegalStateException(it)
                 }
                 conn = Conn.Connecting("Loading spaces…")
-                start(client)
+                start(client) { mine == connecting }
             } catch (e: UnknownHostKey) {
-                conn = Conn.Failed(e.message ?: "", e)
+                if (mine == connecting) conn = Conn.Failed(e.message ?: "", e)
             } catch (e: Exception) {
+                if (mine != connecting) return@launch
                 conn = Conn.Failed(describe(e))
                 scheduleReconnect()
             }
@@ -311,29 +349,46 @@ class Session(private val context: Context) {
 
     /** Connects to the built-in pretend core: sample spaces and agents, nothing real. */
     fun connectDemo() {
-        if (conn is Conn.Connecting || (conn is Conn.Connected && demo)) return
+        if (demo && (conn is Conn.Connecting || conn is Conn.Connected)) return
         disconnect()
         demo = true
         wantConnected = false
         conn = Conn.Connecting("Starting the demo…")
+        val mine = ++connecting
         main.launch {
             try {
                 val d = herdr.core.DemoCore()
                 val client = withContext(Dispatchers.IO) { CoreClient.connect(d.clientInput, d.clientOutput) { d.close() } }
-                start(client)
+                if (mine != connecting) {
+                    client.close()
+                    return@launch
+                }
+                start(client) { mine == connecting }
             } catch (e: Exception) {
-                conn = Conn.Failed("The demo didn't start: ${e.message}")
+                if (mine == connecting) conn = Conn.Failed("The demo didn't start: ${e.message}")
             }
         }
     }
 
     fun disconnect() {
+        connecting++
         demo = false
         wantConnected = false
+        settings.edit().putBoolean("connected", false).apply()
         reconnect?.cancel()
         core?.close()
         core = null
         conn = Conn.Idle
+    }
+
+    /**
+     * Android ended the app in the background and started it again for the
+     * watching service: connect again if it was connected before, so the
+     * service is really watching.
+     */
+    fun resume() {
+        if (core != null || demo || conn is Conn.Connecting) return
+        if (alerts && profile.ready && settings.getBoolean("connected", false)) connect()
     }
 
     /**
@@ -404,7 +459,7 @@ class Session(private val context: Context) {
         return e.message ?: e.toString()
     }
 
-    private suspend fun start(client: CoreClient) {
+    private suspend fun start(client: CoreClient, current: () -> Boolean) {
         var lines: EventLines? = null
         withContext(Dispatchers.IO) {
             client.subscribe { channel, snapshot ->
@@ -428,6 +483,10 @@ class Session(private val context: Context) {
                     override fun onLost() {}
                 }
             }
+        }
+        if (!current()) {
+            client.close()
+            return
         }
         core = client
         coreVersion = client.hello["version"].str ?: ""
@@ -462,9 +521,51 @@ class Session(private val context: Context) {
     }
 
     /** Reads an agent's screen (text only, no attach). */
-    suspend fun readScreen(address: String): String? =
-        runCatching { io { it.call("terminal.read", obj("terminal" to address), timeoutMs = 5_000) }["text"].str }
+    suspend fun readScreen(address: String, timeoutMs: Long = 5_000): String? =
+        runCatching { io { it.call("terminal.read", obj("terminal" to address), timeoutMs = timeoutMs) }["text"].str }
             .getOrNull()?.also { screens[address] = it }
+
+    /** What an agent asks right now, read from its screen. */
+    suspend fun question(address: String): Question? = readScreen(address, 3_000)?.let { Prompts.question(it) }
+
+    /**
+     * Answers the question the person was shown, known by its [mark]: allow
+     * (the highlighted option), deny (Esc) or a typed [reply]. The screen is
+     * read again first, and nothing is sent unless it still shows that same
+     * question. Connects first if the app isn't connected.
+     */
+    suspend fun answerShown(address: String, mark: String, deny: Boolean = false, reply: String? = null): Answered {
+        if (core == null) {
+            if (demo || !profile.ready) return Answered.Offline
+            connect()
+            withTimeoutOrNull(5_000) { while (core == null) delay(100) } ?: return Answered.Offline
+        }
+        if (agents().firstOrNull { it.address == address }?.state != "blocked") return Answered.Moot
+        val q = question(address) ?: return Answered.Failed("its screen couldn't be read")
+        if (q.mark != mark) return Answered.Changed
+        return try {
+            if (reply != null) {
+                io { it.call("terminal.send", obj("terminal" to address, "text" to reply, "force" to true), timeoutMs = 3_000) }
+            } else {
+                val keys = if (deny) listOf("esc") else Prompts.allowKeys(q) ?: return Answered.Changed
+                io { it.call("terminal.keys", obj("terminal" to address, "keys" to keys), timeoutMs = 3_000) }
+            }
+            Answered.Sent
+        } catch (e: Exception) {
+            Answered.Failed(e.message ?: "the Mac didn't take it")
+        }
+    }
+
+    /** One-tap allow in the agents list, for the question shown there. */
+    fun allowShown(address: String, mark: String) = attempt("Cannot answer") {
+        when (val r = answerShown(address, mark)) {
+            Answered.Sent -> { delay(500); readScreen(address) }
+            Answered.Changed -> { readScreen(address); notice = "The question changed. Look at it again." }
+            Answered.Moot -> notice = "It isn't waiting any more."
+            Answered.Offline -> notice = "Not connected to the Mac."
+            is Answered.Failed -> notice = "Not sent: ${r.why}"
+        }
+    }
 
     /** Refreshes the screens of these agents, for their previews and answers. */
     fun refreshScreens(addresses: Collection<String>) {
@@ -539,16 +640,6 @@ class Session(private val context: Context) {
         list.forEach { lastStates[it.address] = it.state }
         statesKnown = true
         onAgents?.invoke(list)
-    }
-
-    /** Answers an agent from a notification: named keys (`enter`, `esc`), no screen needed. */
-    fun answerKeys(address: String, keys: List<String>) = attempt("Cannot answer") {
-        io { it.call("terminal.keys", obj("terminal" to address, "keys" to keys)) }
-    }
-
-    /** Types a reply to an agent (pasted, then Enter), even while it shows a dialog. */
-    fun answerText(address: String, text: String) = attempt("Cannot send") {
-        io { it.call("terminal.send", obj("terminal" to address, "text" to text, "force" to true)) }
     }
 
     /** Runs a saved command: typed into [address], or in a new tab of the shown space. */
@@ -878,6 +969,33 @@ class Session(private val context: Context) {
             }
         }
         if (ok) place.pane.terminal?.let { kill(listOf(it)) }
+    }
+
+    private val shells = setOf("zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "csh", "nu", "login")
+
+    /** What closing a terminal would end: its agent or program, or null for a shell with nothing running. */
+    private fun running(address: String?): String? {
+        val t = terminals[address ?: return null] ?: return null
+        t["status"].obj?.let { status -> return status["app"].str?.ifEmpty { null } ?: "an agent" }
+        val name = t["foreground"]["name"].str?.removePrefix("-")?.ifEmpty { null } ?: return "what is running in it"
+        return if (name in shells) null else name
+    }
+
+    /** Close pane, from the screen: asks first when something is running in it. */
+    fun requestClosePane(paneId: String) {
+        val place = place(paneId) ?: return
+        val what = running(place.pane.terminal)
+        if (what == null) closePane(paneId)
+        else closing = Closing("Close this pane?", "This ends $what, on every screen.", "Close pane") { closePane(paneId) }
+    }
+
+    /** Close tab, from the screen: asks first when something is running in it. */
+    fun requestCloseTab(tabId: String) {
+        val s = spaces.firstOrNull { sp -> sp.tabs.any { it.id == tabId } } ?: return
+        val tab = s.tabs.first { it.id == tabId }
+        val what = tab.root.panes().mapNotNull { running(it.terminal) }.distinct()
+        if (what.isEmpty()) closeTab(tabId)
+        else closing = Closing("Close tab ${tabName(s, tab)}?", "This ends ${what.joinToString(", ")}, on every screen.", "Close tab") { closeTab(tabId) }
     }
 
     fun closeTab(tabId: String) = attempt("Cannot close the tab") {

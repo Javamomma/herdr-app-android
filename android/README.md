@@ -31,8 +31,9 @@ at the apps made for its socket API, such as
   or split on the phone and the Mac window follows, and the other way round.
 - **Agents**: every agent that reports status, blocked → done → working →
   idle. Tap one to jump to it; a worker without a pane opens in a peek.
-- **Notifications** when an agent needs you or finishes, with **Allow**,
-  **Deny** and **Reply** right in the notification.
+- **Notifications** when an agent needs you or finishes, showing its question,
+  with **Allow**, **Deny** and **Reply** right in the notification. They need
+  the phone unlocked and never answer a question you didn't see.
 - **Fold-aware layout**: sidebar beside your splits when unfolded; folded, the
   cover screen opens on your agents and shows one pane at a time. Folding
   never restarts anything.
@@ -100,7 +101,8 @@ reconnects by itself when you switch networks.
 
 ## Privacy
 
-No accounts, no analytics, no servers of ours. The app talks only to your Mac.
+No accounts, no analytics, no servers of ours. The app talks to your Mac, and
+asks GitHub whether a new version is out.
 See [PRIVACY.md](PRIVACY.md).
 
 ## Build

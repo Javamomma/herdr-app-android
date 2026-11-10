@@ -1,4 +1,5 @@
-# Screenshots of the demo on an emulator sized like a Galaxy Z Fold 7.
+# Screenshots of the demo on an emulator sized like a Galaxy Z Fold 7, then
+# the safety checks (scripts/safety-check.sh) on the same emulator.
 # Run by hand from the Actions tab; the PNGs land in the run's artifacts.
 name: screenshots
 
@@ -35,9 +36,12 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: ./scripts/screenshots.sh apk/app-debug.apk screenshots
+          script: |
+            ./scripts/screenshots.sh apk/app-debug.apk screenshots
+            ./scripts/safety-check.sh screenshots
       - uses: actions/upload-artifact@v5
+        if: always()
         with:
           name: herdr-android-screenshots
-          path: screenshots/*.png
+          path: screenshots/
           if-no-files-found: error

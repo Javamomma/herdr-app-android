@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -12,6 +13,7 @@ import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
 import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -38,7 +40,11 @@ class MainActivity : FragmentActivity() {
         pool.onFontChanged = { session.saveFont(it) }
         locked = session.lockEnabled
         runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()?.let { session.checkForUpdate(it) }
-        setContent { HerdrRoot(session, pool, locked = locked, onUnlock = ::unlock) }
+        setContent {
+            val lock = session.lockEnabled
+            LaunchedEffect(lock) { hideFromRecents(lock) }
+            HerdrRoot(session, pool, locked = locked, onUnlock = ::unlock)
+        }
         if (!handle(intent) && session.profile.ready) session.connect()
         if (Build.VERSION.SDK_INT >= 33 && session.alerts &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -82,6 +88,21 @@ class MainActivity : FragmentActivity() {
         super.onStop()
         backgroundedAt = SystemClock.elapsedRealtime()
         session.setForeground(false)
+    }
+
+    /**
+     * With the app lock on, the recent-apps view shows no picture of the
+     * terminals. Before Android 13 that takes the secure flag, which also
+     * stops screenshots.
+     */
+    private fun hideFromRecents(hide: Boolean) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            setRecentsScreenshotEnabled(!hide)
+        } else if (hide) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
     }
 
     /** Asks for a fingerprint, face or the phone's PIN, then shows the app. */

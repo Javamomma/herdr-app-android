@@ -255,6 +255,15 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
     }
 
     dialog?.let { Dialogs(session, it, onDismiss = { dialog = null }) }
+    session.closing?.let { c ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { session.closing = null },
+            title = { Text(c.title) },
+            text = { Text(c.text) },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { session.closing = null; c.run() }) { Text(c.confirm, color = Theme.stateColor("blocked")) } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { session.closing = null }) { Text("Cancel") } },
+        )
+    }
     if (snippetsOpen) SnippetsDialog(session, pool, onDismiss = { snippetsOpen = false })
     if (settings) SettingsDialog(session, pool, onDismiss = { settings = false }, onEditConnection = { settings = false; onEditConnection() })
 }
@@ -321,7 +330,7 @@ private fun Sidebar(
             item(key = "m:$machine") {
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, top = 10.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(session.machineLabel(machine).uppercase(), color = Theme.dim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                    IconButton(onClick = { onNewSpace(machine) }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Add, "New space", tint = Theme.dim, modifier = Modifier.size(18.dp)) }
+                    IconButton(onClick = { onNewSpace(machine) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, "New space", tint = Theme.dim, modifier = Modifier.size(20.dp)) }
                 }
                 session.layoutErrors[machine ?: ""]?.let { Text(it, color = Theme.stateColor("blocked"), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
             }
@@ -446,7 +455,7 @@ private fun TabBar(session: Session, space: Space?, wide: Boolean, onRename: (Ta
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text("Rename tab") }, onClick = { menu = false; onRename(t) })
-                    DropdownMenuItem(text = { Text("Close tab") }, onClick = { menu = false; session.closeTab(t.id) })
+                    DropdownMenuItem(text = { Text("Close tab") }, onClick = { menu = false; session.requestCloseTab(t.id) })
                 }
             }
         }
@@ -462,7 +471,7 @@ private fun NewMenu(session: Session, space: Space, onCustom: () -> Unit) {
         if (open && found == null) found = runCatching { session.installedAgents(space.machine) }.getOrDefault(emptyList())
     }
     Box {
-        IconButton(onClick = { open = true }, modifier = Modifier.size(34.dp)) { Icon(Icons.Default.Add, "New tab", tint = Theme.text) }
+        IconButton(onClick = { open = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, "New tab", tint = Theme.text) }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(text = { Text("Terminal") }, onClick = { open = false; session.newTab(space.id, null) })
             when (val f = found) {
@@ -598,7 +607,7 @@ private fun PaneView(session: Session, pool: TerminalPool, space: Space, tab: Ta
             .background(Theme.bg, RoundedCornerShape(6.dp)),
     ) {
         Row(
-            Modifier.fillMaxWidth().height(28.dp).background(Theme.panel, RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+            Modifier.fillMaxWidth().height(36.dp).background(Theme.panel, RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
                 .clickable { session.focusPane(tab.id, id); pool.get(addr)?.focus() }.padding(start = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -618,7 +627,7 @@ private fun PaneView(session: Session, pool: TerminalPool, space: Space, tab: Ta
             Box {
                 PaneButton(Icons.Default.MoreVert, "More") { menu = true }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text("Close pane") }, onClick = { menu = false; session.closePane(id) })
+                    DropdownMenuItem(text = { Text("Close pane") }, onClick = { menu = false; session.requestClosePane(id) })
                     if (addr != null) DropdownMenuItem(text = { Text("Copy selection") }, onClick = {
                         menu = false
                         pool.get(addr)?.copySelection { session.copied = it }
@@ -642,7 +651,7 @@ private fun PaneView(session: Session, pool: TerminalPool, space: Space, tab: Ta
 
 @Composable
 private fun PaneButton(icon: ImageVector, label: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(28.dp)) { Icon(icon, label, tint = Theme.dim, modifier = Modifier.size(16.dp)) }
+    IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) { Icon(icon, label, tint = Theme.dim, modifier = Modifier.size(18.dp)) }
 }
 
 /** The terminal's native view, moved into whichever box shows it. */
@@ -716,7 +725,7 @@ fun KeyBar(session: Session, pool: TerminalPool) {
         Text(
             label, color = if (active) Theme.bg else Theme.text, fontSize = 13.sp, fontFamily = FontFamily.Monospace,
             modifier = Modifier.padding(horizontal = 2.dp).background(if (active) Theme.accent else Theme.raised, RoundedCornerShape(5.dp))
-                .clickable(onClick = onClick).padding(horizontal = 11.dp, vertical = 8.dp),
+                .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 11.dp),
         )
     }
     if (composing && address != null) Composer(session, address) { target() }
@@ -842,8 +851,13 @@ private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit) {
                     }
                     if (a.state == "blocked") Answers(session, a, compact = false)
                 }
-                if (a.state == "blocked" && session.screens[a.address]?.let { herdr.core.Prompts.choices(it).isEmpty() } != false) {
-                    androidx.compose.material3.TextButton(onClick = { session.answerKeys(a.address, listOf("enter")) }) { Text("Allow") }
+                // A question without options: Allow is Enter, sent only while this same question shows.
+                val shown = session.screens[a.address]
+                if (a.state == "blocked" && shown != null) {
+                    val q = remember(shown) { herdr.core.Prompts.question(shown) }
+                    if (q.choices.isEmpty() && herdr.core.Prompts.allowKeys(q) != null) {
+                        androidx.compose.material3.TextButton(onClick = { session.allowShown(a.address, q.mark) }) { Text("Allow") }
+                    }
                 }
             }
         }
