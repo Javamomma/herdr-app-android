@@ -1,0 +1,87 @@
+# Builds the Android client (android/) and uploads an installable APK.
+name: android
+
+on:
+  push:
+    paths: ["android/**", ".github/workflows/android.yml"]
+  pull_request:
+    paths: ["android/**", ".github/workflows/android.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test the core client and terminal engine, build the APK
+        run: ./gradlew --no-daemon :protocol:test :terminal:test :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herdr-android-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  # The app in demo mode on an emulator sized like a Galaxy Z Fold 7, for the
+  # README and announcements. Pushes only (PR runs would just repeat them).
+  screenshots:
+    needs: apk
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: herdr-android-apk
+          path: android/apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          working-directory: android
+          script: ./scripts/screenshots.sh apk/app-debug.apk screenshots
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herdr-android-screenshots
+          path: android/screenshots/*.png
+          if-no-files-found: error
+      - name: Publish them on the ci-screenshots branch
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          cd android/screenshots
+          git init -q
+          git checkout -q -b ci-screenshots
+          git add .
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "screenshots for $GITHUB_SHA"
+          git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}" ci-screenshots
