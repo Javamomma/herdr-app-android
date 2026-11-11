@@ -1,0 +1,41 @@
+# Tests and a debug APK for the Android client (android/) on every push and
+# pull request that touches it. Screenshots: android-screenshots.yml (by hand).
+name: android
+
+on:
+  push:
+    paths: ["android/**", ".github/workflows/android.yml"]
+  pull_request:
+    paths: ["android/**", ".github/workflows/android.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Test the core client and terminal engine, build the APK
+        run: ./gradlew --no-daemon :protocol:test :terminal:test :app:assembleDebug
+      - uses: actions/upload-artifact@v5
+        with:
+          name: herdr-android-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
