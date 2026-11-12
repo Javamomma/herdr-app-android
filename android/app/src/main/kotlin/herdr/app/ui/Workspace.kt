@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.lazy.LazyColumn
@@ -397,7 +398,8 @@ private fun AgentRow(session: Session, a: Agent, onPicked: () -> Unit) {
 @Composable
 fun Answers(session: Session, a: Agent, compact: Boolean) {
     val screen = session.screens[a.address] ?: return
-    val choices = remember(screen) { herdr.core.Prompts.choices(screen) }
+    val q = remember(screen) { herdr.core.Prompts.question(screen) }
+    val choices = q.choices
     if (choices.isEmpty()) return
     androidx.compose.foundation.layout.FlowRow(
         Modifier.padding(top = 6.dp),
@@ -405,14 +407,14 @@ fun Answers(session: Session, a: Agent, compact: Boolean) {
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         for (c in choices) {
-            val color = if (c.risky) Theme.stateColor("blocked") else Theme.accent
+            val color = if (c.risky || q.dangerous) Theme.stateColor("blocked") else Theme.accent
             Text(
-                (c.number?.let { "$it. " } ?: "") + c.label + if (c.risky) "  (hold)" else "",
+                (c.number?.let { "$it. " } ?: "") + c.label + if (c.risky || q.dangerous) "  (hold)" else "",
                 color = color, fontSize = if (compact) 12.sp else 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.border(1.dp, color.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
                     .combinedClickable(
-                        onClick = { if (c.risky) session.notice = "Press and hold to choose \"${c.label}\"" else session.choose(a.address, c.label) },
-                        onLongClick = { session.choose(a.address, c.label) },
+                        onClick = { if (c.risky || q.dangerous) session.notice = "Press and hold to choose \"${c.label}\"" else session.choose(a.address, c.label, q.mark, held = false) },
+                        onLongClick = { session.choose(a.address, c.label, q.mark, held = true) },
                     )
                     .padding(horizontal = 10.dp, vertical = if (compact) 5.dp else 8.dp),
             )
@@ -451,7 +453,7 @@ private fun TabBar(session: Session, space: Space?, wide: Boolean, onRename: (Ta
                         Dot(state, 7.dp)
                         Spacer(Modifier.width(6.dp))
                     }
-                    Text(session.tabName(space, t), color = if (selected) Theme.text else Theme.dim, fontSize = 13.sp, maxLines = 1)
+                    Text(session.tabName(space, t), color = if (selected) Theme.text else Theme.dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text("Rename tab") }, onClick = { menu = false; onRename(t) })

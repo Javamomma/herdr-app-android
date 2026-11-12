@@ -33,6 +33,9 @@ data class Question(
  * keys that pick one. Pure text work, so it's tested without a device.
  */
 object Prompts {
+    /** The most lines of a prompt's own block the mark and the danger check read. */
+    private const val MARK_LINES = 40
+
     private val option = Regex("""^[\s│|]*([❯›>▶→●*]?)\s*(\d{1,2})[.)]\s+(.+?)\s*[│|]?\s*$""")
     private val riskyWords = listOf(
         "don't ask", "dont ask", "do not ask", "always", "for this session", "all edits", "push", "force",
@@ -90,16 +93,38 @@ object Prompts {
         val block = block(lines)
         val choices = choices(block)
         val above = if (block.isEmpty()) lines else lines.subList(0, block.first().first)
-        val text = above.map(::clean).filter { it.isNotBlank() }.takeLast(if (block.isEmpty()) 8 else 6)
-        val all = text + choices.map { "${if (it.selected) '>' else ' '}${it.number}.${it.label}" }
-        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(all.joinToString("\n").toByteArray())
-        val joined = text.joinToString("\n")
+        val context = above.map(::clean).filter { it.isNotBlank() }
+        val text = context.takeLast(if (block.isEmpty()) 8 else 6)
+        // The prompt's own block (up to the rule or box edge above its options) can be longer than the text
+        // shown: two long commands that end in the same lines must still differ, in mark and in danger.
+        val own = if (block.isEmpty()) emptyList() else ownLines(above)
+        val covered = own.ifEmpty { text }
+        val all = covered + choices.map { "${if (it.selected) '>' else '.'}${it.number}.${it.label}" }
+        // No whitespace in the hash: the same text wrapped differently keeps its mark.
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(all.joinToString("").filter { !it.isWhitespace() }.toByteArray())
+        val joined = (covered + text).joinToString("\n")
         return Question(
             text = text,
             choices = choices,
             mark = digest.take(8).joinToString("") { "%02x".format(it) },
             dangerous = dangerous.any { it.containsMatchIn(joined) },
         )
+    }
+
+    private fun isRule(line: String): Boolean {
+        val t = line.trim()
+        return t.length >= 3 && t.all { it in '\u2500'..'\u257F' || it == '-' || it == '=' || it == '_' }
+    }
+
+    /**
+     * The cleaned lines between the nearest rule/box edge above the options and
+     * the options, at most [MARK_LINES]; empty when there is no such line.
+     */
+    private fun ownLines(above: List<String>): List<String> {
+        val rule = above.indexOfLast(::isRule)
+        if (rule < 0) return emptyList()
+        return above.subList(rule + 1, above.size).map(::clean).filter { it.isNotBlank() }.takeLast(MARK_LINES)
     }
 
     /**
@@ -132,6 +157,29 @@ object Prompts {
         val moves = target.index - at
         val arrow = if (moves > 0) "down" else "up"
         return List(kotlin.math.abs(moves)) { arrow } + "enter"
+    }
+
+    /** What tapping one of the answer buttons does. */
+    sealed interface Pick {
+        /** Send these keys. */
+        data class Send(val keys: List<String>) : Pick
+        /** The screen no longer shows the question the button belonged to. */
+        object Changed : Pick
+        /** Risky option or dangerous command: only a press-and-hold takes it. */
+        object NeedsHold : Pick
+    }
+
+    /**
+     * The answer button [label], drawn for the question with [mark], read against
+     * the [screen] as it is now: nothing is sent unless it is still that question.
+     * Risky options and any option of a dangerous question need [held].
+     */
+    fun pick(screen: String, mark: String, label: String, held: Boolean): Pick {
+        val q = question(screen)
+        if (q.mark != mark) return Pick.Changed
+        val target = q.choices.firstOrNull { it.label == label } ?: return Pick.Changed
+        if ((target.risky || q.dangerous) && !held) return Pick.NeedsHold
+        return Pick.Send(keys(q.choices, target))
     }
 
     /** The last [n] lines with text, for a preview. */
