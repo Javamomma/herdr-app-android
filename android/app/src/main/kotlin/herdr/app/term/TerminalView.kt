@@ -292,15 +292,11 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
             performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
             synchronized(emu) {
                 val (idx, col) = cellAt(e.x, e.y)
-                val line = emu.lineAt(idx) ?: return
+                if (emu.lineAt(idx) == null) return
                 // Start with the word under the finger.
-                fun isWord(c: Int) = line.text(c)?.firstOrNull()?.let { !it.isWhitespace() } == true
-                var a = col
-                var b = col
-                if (isWord(col)) {
-                    while (a > 0 && isWord(a - 1)) a--
-                    while (b < emu.cols - 1 && isWord(b + 1)) b++
-                }
+                val word = emu.wordAt(idx, col)
+                val a = word.first
+                val b = word.last
                 selStart = idx to a
                 selEnd = idx to b
             }

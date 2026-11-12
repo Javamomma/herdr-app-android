@@ -855,6 +855,18 @@ class Emulator(cols: Int, rows: Int, private val scrollbackLimit: Int = 5000) {
 
     private fun cursorRowMain(): Int = if (altScreen) (savedMain?.row ?: 0).coerceIn(0, rows - 1) else cursorRow
 
+    /** The columns of the word under (index, col), or col..col when the cell is blank or off the line. */
+    fun wordAt(index: Int, col: Int): IntRange {
+        val line = lineAt(index) ?: return col..col
+        fun isWord(c: Int) = line.text(c)?.firstOrNull()?.let { !it.isWhitespace() } == true
+        if (!isWord(col)) return col..col
+        var a = col
+        var b = col
+        while (a > 0 && isWord(a - 1)) a--
+        while (b < cols - 1 && isWord(b + 1)) b++
+        return a..b
+    }
+
     /** The text between two cells (row indexes as in [lineAt]), lines joined unless wrapped. */
     fun text(startIndex: Int, startCol: Int, endIndex: Int, endCol: Int): String {
         val sb = StringBuilder()
