@@ -1084,6 +1084,11 @@ class Session(private val context: Context) {
 
     fun saveFont(px: Int) = viewPrefs.edit().putInt("font", px).apply()
 
+    /** The left panel hidden on the wide layout: this phone's own choice, never written to the shared layout. */
+    var sidebarHidden by mutableStateOf(viewPrefs.getBoolean("sidebarHidden", false))
+        private set
+    fun updateSidebarHidden(hidden: Boolean) { sidebarHidden = hidden; viewPrefs.edit().putBoolean("sidebarHidden", hidden).apply() }
+
     // ---- files and git, through the core ------------------------------------
 
     /** Runs a program on a machine (no shell) and returns its stdout. */

@@ -2,6 +2,7 @@ package herdr.app.ui
 
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -91,6 +92,8 @@ import herdr.app.Session
 import herdr.app.Theme
 import herdr.app.term.TerminalPool
 import herdr.core.Axis
+import herdr.core.LeftPanel
+import herdr.core.PanelToggle
 import herdr.core.SendOutcome
 import herdr.core.draftAfter
 import herdr.term.Clip
@@ -196,6 +199,9 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         LaunchedEffect(session.peek, session.activeSpace) { if (session.peek != null) agentsHome = false }
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
+        val drawerOpen = drawer.currentValue == DrawerValue.Open
+        // Back closes an open drawer first; a panel shown beside the terminal never swallows it.
+        BackHandler(enabled = LeftPanel.backCloses(wide, drawerOpen)) { scope.launch { drawer.close() } }
         val sidebar: @Composable () -> Unit = {
             Sidebar(
                 session,
@@ -209,7 +215,13 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         val main: @Composable () -> Unit = {
             Column(Modifier.fillMaxSize().imePadding()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (!wide) IconButton(onClick = { scope.launch { drawer.open() } }) { Icon(Icons.Default.Menu, "Spaces", tint = Theme.text) }
+                    IconButton(onClick = {
+                        when (LeftPanel.toggle(wide, drawerOpen)) {
+                            PanelToggle.FlipSaved -> session.updateSidebarHidden(!session.sidebarHidden)
+                            PanelToggle.OpenDrawer -> scope.launch { drawer.open() }
+                            PanelToggle.CloseDrawer -> scope.launch { drawer.close() }
+                        }
+                    }) { Icon(Icons.Default.Menu, "Show or hide the left panel", tint = Theme.text) }
                     if (!wide) IconButton(onClick = { agentsHome = !agentsHome }) {
                         Icon(Icons.Default.SmartToy, "Agents", tint = if (agentsHome) Theme.accent else Theme.dim)
                     }
@@ -241,12 +253,15 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         }
         if (wide) {
             Row(Modifier.fillMaxSize()) {
-                Box(Modifier.width(if (wider) 280.dp else 240.dp).fillMaxHeight().background(Theme.panel)) { sidebar() }
-                Box(Modifier.width(1.dp).fillMaxHeight().background(Theme.border))
+                if (LeftPanel.besideShown(wide, session.sidebarHidden)) {
+                    Box(Modifier.width(if (wider) 280.dp else 240.dp).fillMaxHeight().background(Theme.panel)) { sidebar() }
+                    Box(Modifier.width(1.dp).fillMaxHeight().background(Theme.border))
+                }
                 Box(Modifier.weight(1f)) { main() }
             }
         } else {
-            ModalNavigationDrawer(drawerState = drawer, drawerContent = {
+            // Swipe only while open (to swipe it shut): sideways drags that start on the terminal are its own (selection, scrolling).
+            ModalNavigationDrawer(drawerState = drawer, gesturesEnabled = LeftPanel.drawerGestures(drawerOpen), drawerContent = {
                 ModalDrawerSheet(drawerContainerColor = Theme.panel, modifier = Modifier.width(300.dp)) { sidebar() }
             }) { main() }
         }
