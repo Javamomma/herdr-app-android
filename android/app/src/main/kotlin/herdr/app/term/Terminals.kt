@@ -10,6 +10,8 @@ import androidx.compose.runtime.setValue
 import herdr.app.Session
 import herdr.app.Theme
 import herdr.core.CoreClient
+import herdr.core.SendOutcome
+import herdr.core.sendInput
 import herdr.core.StreamListener
 import herdr.core.get
 import herdr.core.str
@@ -109,6 +111,11 @@ class TerminalController(context: Context, val address: String, private val sess
         send(if (m.ctrl || m.alt) Keys.text(t, m) else t)
     }
 
+    /** Text the keyboard committed: several lines go in as one real paste, one line is typed. */
+    fun committed(text: String) {
+        if (Keys.commitsAsPaste(text)) paste(text) else typed(text)
+    }
+
     fun sendKey(key: Key, mods: Mods) {
         val appCursor = synchronized(emu) { emu.appCursorKeys }
         send(Keys.encode(key, latched(mods), appCursor))
@@ -149,11 +156,29 @@ class TerminalController(context: Context, val address: String, private val sess
         send(Keys.paste(text, bracketed))
     }
 
-    /** A message from the Type composer: pasted as one piece, then Enter. */
-    fun submit(text: String) {
-        if (text.isNotEmpty()) paste(text)
-        // Let the program take the paste before the Enter that sends it.
-        ui.postDelayed({ send("\r") }, 60)
+    /**
+     * A message from the Type composer: pasted as one piece, then Enter.
+     * [done] hears (on the UI thread) what became of it; never resent here.
+     */
+    fun submit(text: String, done: (SendOutcome) -> Unit) {
+        val core = attachedTo
+        val chn = channel
+        val bracketed = synchronized(emu) { emu.bracketedPaste }
+        thread(name = "hc-submit", isDaemon = true) {
+            var outcome = SendOutcome.Accepted
+            if (text.isNotEmpty()) outcome = sendInput(core, chn, Keys.paste(text, bracketed).toByteArray(Charsets.UTF_8))
+            if (outcome == SendOutcome.Accepted) {
+                // Let the program take the paste before the Enter that sends it.
+                if (text.isNotEmpty()) Thread.sleep(60)
+                val enter = sendInput(core, chn, "\r".toByteArray())
+                // The text already went in: a failed Enter is "may have been sent", not "nothing happened".
+                outcome = if (enter == SendOutcome.Accepted) enter else if (text.isNotEmpty()) SendOutcome.Unknown else enter
+            }
+            ui.post {
+                if (outcome == SendOutcome.Accepted) view.scrollToBottom()
+                done(outcome)
+            }
+        }
     }
 
     fun setFont(px: Int) {

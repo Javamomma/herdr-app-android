@@ -72,7 +72,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -88,6 +91,9 @@ import herdr.app.Session
 import herdr.app.Theme
 import herdr.app.term.TerminalPool
 import herdr.core.Axis
+import herdr.core.SendOutcome
+import herdr.core.draftAfter
+import herdr.term.Clip
 import herdr.core.Space
 import herdr.core.Tab
 import herdr.core.activeChild
@@ -730,10 +736,33 @@ fun KeyBar(session: Session, pool: TerminalPool) {
                 .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 11.dp),
         )
     }
-    if (composing && address != null) Composer(session, address) { target() }
+    // The message box's text and cursor live here so Paste can insert at the cursor.
+    val draftText = address?.let { session.drafts[it] } ?: ""
+    var typedField by remember(address) { mutableStateOf(TextFieldValue(draftText, TextRange(draftText.length))) }
+    val field = if (typedField.text == draftText) typedField else TextFieldValue(draftText, TextRange(draftText.length))
+    var boxFocused by remember(address) { mutableStateOf(false) }
+    fun pasteIntoDraft(text: String) {
+        val a = address ?: return
+        val (t, pos) = Clip.insertAt(field.text, field.selection.start, field.selection.end, text)
+        typedField = TextFieldValue(t, TextRange(pos))
+        session.drafts[a] = t
+    }
+    fun pasteFromClipboard(toDraft: Boolean) {
+        val text = clipboard.getText()?.text
+        if (text.isNullOrEmpty()) { session.notice = "Nothing to paste"; return }
+        // With the message box in use the text goes into the draft and nothing reaches the terminal.
+        if (toDraft) pasteIntoDraft(text) else target()?.paste(text)
+    }
+    if (composing && address != null) {
+        Composer(
+            session, address, field, onField = { typedField = it; session.drafts[address] = it.text },
+            onFocus = { boxFocused = it }, onPaste = { pasteFromClipboard(true) },
+        ) { target() }
+    }
     Row(Modifier.fillMaxWidth().background(Theme.panel).horizontalScroll(rememberScrollState()).padding(4.dp)) {
         K("⌨", imeVisible) { target()?.toggleKeyboard(imeVisible) }
         K("esc") { target()?.key("esc") }
+        K("paste") { pasteFromClipboard(composing && boxFocused) }
         K("^C") { target()?.type("\u0003") }
         K("tab") { target()?.key("tab") }
         K("ctrl", session.ctrl) { session.ctrl = !session.ctrl }
@@ -750,15 +779,15 @@ fun KeyBar(session: Session, pool: TerminalPool) {
         K("pgup") { target()?.key("pgup") }
         K("pgdn") { target()?.key("pgdn") }
         K("⚡") { session.requested = "snippets" }
-        K("paste") { clipboard.getText()?.text?.let { target()?.paste(it) } }
         K("type", composing) { if (address != null) session.composer[address] = !composing }
         K("A−") { pool.fontSize = (pool.fontSize - 1).coerceAtLeast(7); session.saveFont(pool.fontSize) }
         K("A+") { pool.fontSize = (pool.fontSize + 1).coerceAtMost(32); session.saveFont(pool.fontSize) }
     }
     LaunchedEffect(session.copied) {
         session.copied?.let {
-            clipboard.setText(androidx.compose.ui.text.AnnotatedString(it))
-            session.notice = if (it.isEmpty()) "Nothing selected: long-press text in the terminal first." else "Copied."
+            // An empty selection must not overwrite what is already on the clipboard.
+            if (Clip.shouldWrite(it)) clipboard.setText(androidx.compose.ui.text.AnnotatedString(it))
+            session.notice = Clip.copyNotice(it)
             session.copied = null
         }
     }
@@ -767,7 +796,12 @@ fun KeyBar(session: Session, pool: TerminalPool) {
 /** A draft for an agent, kept per terminal until sent, with quick phrases and slash commands. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Composer(session: Session, address: String, target: () -> herdr.app.term.TerminalController?) {
+private fun Composer(
+    session: Session, address: String, field: TextFieldValue, onField: (TextFieldValue) -> Unit,
+    onFocus: (Boolean) -> Unit, onPaste: () -> Unit, target: () -> herdr.app.term.TerminalController?,
+) {
+    DisposableEffect(address) { onDispose { onFocus(false) } }
+    var sending by remember { mutableStateOf(false) }
     val draft = session.drafts[address] ?: ""
     val app = session.agents().firstOrNull { it.address == address }?.app ?: ""
     val slash = if (app.contains("codex", ignoreCase = true)) listOf("/new", "/model", "/approvals", "/diff", "/status", "/compact")
@@ -794,16 +828,28 @@ private fun Composer(session: Session, address: String, target: () -> herdr.app.
     }
     Row(Modifier.fillMaxWidth().background(Theme.panel).padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.Bottom) {
         androidx.compose.material3.OutlinedTextField(
-            value = draft, onValueChange = { session.drafts[address] = it },
+            value = field, onValueChange = onField,
             placeholder = { Text("Message the agent…", fontSize = 14.sp) },
-            maxLines = 6, modifier = Modifier.weight(1f),
+            maxLines = 6, modifier = Modifier.weight(1f).onFocusChanged { onFocus(it.isFocused) },
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences),
         )
-        Spacer(Modifier.width(6.dp))
+        androidx.compose.material3.TextButton(onClick = onPaste, modifier = Modifier.padding(bottom = 4.dp)) { Text("Paste") }
         androidx.compose.material3.Button(
+            enabled = !sending,
             onClick = {
-                target()?.submit(draft)
-                session.drafts.remove(address)
+                val sent = draft
+                val t = target()
+                if (t == null) {
+                    session.notice = SendOutcome.Rejected.notice
+                } else {
+                    sending = true
+                    t.submit(sent) { outcome ->
+                        sending = false
+                        // The draft stays unless the message was delivered; nothing is resent.
+                        if (draftAfter(session.drafts[address] ?: "", sent, outcome).isEmpty()) session.drafts.remove(address)
+                        outcome.notice?.let { session.notice = it }
+                    }
+                }
             },
             modifier = Modifier.padding(bottom = 4.dp),
         ) { Text("Send") }

@@ -460,7 +460,7 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
             override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
                 composing = ""
                 editable?.clear()
-                term.typed(text.toString())
+                term.committed(text.toString())
                 return true
             }
 
@@ -470,7 +470,7 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
             }
 
             override fun finishComposingText(): Boolean {
-                if (composing.isNotEmpty()) term.typed(composing)
+                if (composing.isNotEmpty()) term.committed(composing)
                 composing = ""
                 editable?.clear()
                 return true

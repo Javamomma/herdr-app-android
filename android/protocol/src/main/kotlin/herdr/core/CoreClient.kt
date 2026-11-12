@@ -32,7 +32,12 @@ class RpcException(val error: JsonElement, method: String) :
     val kind: String? get() = error["data"]["kind"].str
 }
 
-class CoreLostException(message: String) : Exception(message)
+/**
+ * The connection is gone or gave no answer. [afterWrite] is true when the
+ * request had already been written, so the core may have acted on it; false
+ * when it failed before anything was written.
+ */
+class CoreLostException(message: String, val afterWrite: Boolean = false) : Exception(message)
 
 /** Receives one channel's frames, on the connection's reader thread. */
 interface StreamListener {
@@ -78,7 +83,10 @@ class CoreClient private constructor(
     val hello: JsonObject,
     private val onClose: () -> Unit,
 ) {
-    private val queue = LinkedBlockingQueue<ByteArray>()
+    /** One frame to write; [ack] (for typed input) learns whether it went out. */
+    private class Out(val bytes: ByteArray, val ack: CompletableFuture<SendOutcome>? = null)
+
+    private val queue = LinkedBlockingQueue<Out>()
     private val nextId = AtomicLong(1)
     private val replies = ConcurrentHashMap<Long, CompletableFuture<JsonElement>>()
     private val streams = ConcurrentHashMap<Int, StreamListener>()
@@ -125,14 +133,20 @@ class CoreClient private constructor(
 
     private fun start() {
         Thread({
+            var current: Out? = null
             try {
                 while (true) {
-                    val frame = queue.take()
-                    if (frame.isEmpty()) break
-                    output.write(frame)
-                    if (queue.isEmpty()) output.flush()
+                    val out = queue.take()
+                    if (out.bytes.isEmpty()) break
+                    current = out
+                    output.write(out.bytes)
+                    if (queue.isEmpty() || out.ack != null) output.flush()
+                    current = null
+                    out.ack?.complete(SendOutcome.Accepted)
                 }
             } catch (_: Exception) {
+                // Cut off mid-write: it may or may not have gone out.
+                current?.ack?.complete(SendOutcome.Unknown)
             }
             shutdown()
         }, "hc-writer").apply { isDaemon = true }.start()
@@ -189,8 +203,12 @@ class CoreClient private constructor(
             automaticInput.clear()
             l to lostListeners.toList()
         }
-        queue.offer(ByteArray(0))
-        for (r in replies.values) r.completeExceptionally(CoreLostException("lost the core"))
+        while (true) {
+            val unsent = queue.poll() ?: break
+            unsent.ack?.complete(SendOutcome.Rejected)
+        }
+        queue.offer(Out(ByteArray(0)))
+        for (r in replies.values) r.completeExceptionally(CoreLostException("lost the core", afterWrite = true))
         replies.clear()
         for (l in listeners) runCatching { l.onLost() }
         for (l in lost) runCatching { l() }
@@ -208,7 +226,7 @@ class CoreClient private constructor(
     fun close() = shutdown()
 
     fun send(channel: Int, kind: Int, payload: ByteArray) {
-        if (!closed) queue.offer(encodeFrame(channel, kind, payload))
+        if (!closed) queue.offer(Out(encodeFrame(channel, kind, payload)))
     }
 
     /** A JSON-RPC call on channel 0; blocks the calling thread (never call it on the UI thread). */
@@ -227,11 +245,11 @@ class CoreClient private constructor(
             return future.get(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (e: TimeoutException) {
             replies.remove(id)
-            throw CoreLostException("$method: no reply from core")
+            throw CoreLostException("$method: no reply from core", afterWrite = true)
         } catch (e: ExecutionException) {
             when (val cause = e.cause) {
                 is RpcException -> throw RpcException(cause.error, method)
-                is CoreLostException -> throw CoreLostException("$method: ${cause.message}")
+                is CoreLostException -> throw CoreLostException("$method: ${cause.message}", cause.afterWrite)
                 else -> throw e
             }
         }
@@ -273,6 +291,19 @@ class CoreClient private constructor(
 
     fun input(channel: Int, bytes: ByteArray) {
         if (bytes.isNotEmpty()) send(channel, Kind.DATA, bytes)
+    }
+
+    /**
+     * Like [input], but says what became of it: [SendOutcome.Accepted] once the
+     * bytes are written and flushed to the link, [SendOutcome.Rejected] when
+     * nothing was written, [SendOutcome.Unknown] when the link broke mid-write.
+     */
+    fun inputAwait(channel: Int, bytes: ByteArray): CompletableFuture<SendOutcome> {
+        val ack = CompletableFuture<SendOutcome>()
+        if (bytes.isEmpty()) ack.complete(SendOutcome.Accepted)
+        else if (closed) ack.complete(SendOutcome.Rejected)
+        else queue.offer(Out(encodeFrame(channel, Kind.DATA, bytes), ack))
+        return ack
     }
 
     /** Terminal-generated replies (answers to the program's queries), not typing. */

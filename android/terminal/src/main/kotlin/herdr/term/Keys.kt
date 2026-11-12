@@ -77,6 +77,14 @@ object Keys {
     }
 
     /**
+     * Text the keyboard committed in one piece: a line break followed by more
+     * text means it was a paste, which goes through [paste] so the line breaks
+     * are not run as Enter. A lone Enter ("\n" is how many keyboards commit it)
+     * or a single line with a trailing break is typed as before.
+     */
+    fun commitsAsPaste(text: CharSequence): Boolean = text.trimEnd('\r', '\n').any { it == '\n' || it == '\r' }
+
+    /**
      * A mouse report: [button] 0 left, 1 middle, 2 right, 64 wheel up, 65 wheel
      * down; [col]/[row] from 0. SGR (1006) when asked, else the classic form.
      */
