@@ -38,7 +38,9 @@ For any agent (Claude or otherwise) changing this app. Read
 
 New logic that doesn't need Android goes in `protocol/` or `terminal/` with a
 test. UI changes: make sure the demo still shows them (`DemoCore`), since CI
-takes screenshots of the demo on Fold-sized screens (`scripts/screenshots.sh`).
+takes screenshots of the demo on Fold-sized screens (`scripts/screenshots.sh`)
+and, on pull requests that touch code, runs `scripts/safety-check.sh` on the
+same emulator.
 
 ## Verify
 
