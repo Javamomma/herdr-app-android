@@ -53,6 +53,38 @@ cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew --no-daemon :prot
 The Mac mini has JDK 21 from Homebrew but no Android SDK; the APK build is
 checked by the `android` GitHub Actions workflow.
 
+## Design notes (why it is the way it is)
+
+From the 2026-11-12 repair build. Read before changing these paths.
+
+- **Send (Type box)** goes through the core's `terminal.send` (bare Enter:
+  `terminal.keys`), not the terminal stream, because only an RPC gets an
+  answer. `sendMessage` (`protocol/Send.kt`) maps it to `SendOutcome`:
+  reply = Accepted, refusal or nothing written = Rejected, timeout or lost
+  link after writing = Unknown. The draft is cleared only on Accepted and
+  nothing is resent. Rejected: acking stream writes (flushed to SSH is not
+  delivered).
+- **Answer buttons** carry the question's `mark` to `Session.choose`, which
+  re-reads the screen and sends only when `Prompts.pick` sees the same mark;
+  the notification path (`answerShown`) uses the same mark. Risky options and
+  every option of a dangerous question need a hold.
+- **The mark** (`Prompts.question`) hashes, without whitespace, the last 6
+  lines above the options (8 with none), extended up to the prompt's own box
+  or rule, at most 40 lines. Only box-drawing lines count as rules. Rejected:
+  a fixed 40 lines (the app reads only the visible screen, so keyboard,
+  fold and resize would change the mark and refuse real answers). Known gap:
+  an unboxed command longer than the cover is hashed only at its tail.
+- **Committed keyboard text** is a paste only when a line break is followed
+  by more text (`Keys.commitsAsPaste`); many keyboards commit Enter as "\n".
+- **Left panel**: `LeftPanel` (`protocol/`) decides what the button and Back
+  do. Hidden/shown on the wide layout is a phone preference
+  (`view` prefs, `sidebarHidden`), never part of the shared layout document.
+  The drawer's swipe-to-open is off so sideways drags stay with the terminal.
+- **Scrollback lines are trimmed**: `Line.text(col)` returns a blank past the
+  end; use `Emulator.wordAt` for word selection.
+- Decisions and user-facing notices that need tests live in `protocol/` and
+  `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
+
 ## Report back
 
 In the pull request description:
