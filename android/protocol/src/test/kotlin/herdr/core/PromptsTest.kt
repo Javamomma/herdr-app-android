@@ -159,6 +159,25 @@ class PromptsTest {
     }
 
     @Test
+    fun a_rule_between_the_command_and_the_question_keeps_the_command_in_the_mark() {
+        fun ask(cmd: String) = "Run this?\n  \$ $cmd\n──────────────\nProceed?\n❯ 1. Yes\n  2. No\n"
+        assertTrue(Prompts.question(ask("rm -rf build")).mark != Prompts.question(ask("rm -rf src")).mark)
+        assertTrue(Prompts.question(ask("rm -rf build")).dangerous)
+        assertTrue(!Prompts.question(ask("ls build")).dangerous)
+        val long = "──────────────\nRun this?\n  \$ rm -rf build\n" + (1..9).joinToString("") { "  echo $it\n" } +
+            "❯ 1. Yes\n  2. No\n"
+        assertTrue(Prompts.question(long).dangerous, "the prompt's block above a rule further up than the last lines is read")
+    }
+
+    @Test
+    fun dashes_inside_a_long_boxed_command_do_not_cut_the_cover() {
+        val a = Prompts.question(boxed("", "curl https://a.example/x", "-----", *tailLines))
+        val b = Prompts.question(boxed("", "curl https://b.example/x", "-----", *tailLines))
+        assertTrue(a.mark != b.mark)
+        assertTrue(Prompts.question(boxed("", "rm -rf build", "=====", *tailLines)).dangerous)
+    }
+
+    @Test
     fun an_unnamed_tab_shows_its_first_agents_title_then_its_number() {
         assertEquals("Work", tabLabel("Work", listOf("title"), 2))
         assertEquals("Fix the build", tabLabel("", listOf(null, "", "  Fix the build "), 2))

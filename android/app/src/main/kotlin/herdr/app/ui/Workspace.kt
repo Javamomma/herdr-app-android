@@ -34,6 +34,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
@@ -200,8 +201,10 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
         val drawerOpen = drawer.currentValue == DrawerValue.Open
-        // Back closes an open drawer first; a panel shown beside the terminal never swallows it.
-        BackHandler(enabled = LeftPanel.backCloses(wide, drawerOpen)) { scope.launch { drawer.close() } }
+        // Back closes the panel first when it is on screen: wide hides it (saved, like the button), folded closes the drawer.
+        BackHandler(enabled = LeftPanel.backCloses(wide, session.sidebarHidden, drawerOpen)) {
+            if (wide) session.updateSidebarHidden(true) else scope.launch { drawer.close() }
+        }
         val sidebar: @Composable () -> Unit = {
             Sidebar(
                 session,
@@ -221,7 +224,10 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
                             PanelToggle.OpenDrawer -> scope.launch { drawer.open() }
                             PanelToggle.CloseDrawer -> scope.launch { drawer.close() }
                         }
-                    }) { Icon(Icons.Default.Menu, "Show or hide the left panel", tint = Theme.text) }
+                    }) {
+                        val icon = if (LeftPanel.open(wide, session.sidebarHidden, drawerOpen)) Icons.AutoMirrored.Filled.MenuOpen else Icons.Default.Menu
+                        Icon(icon, "Show or hide the left panel", tint = Theme.text)
+                    }
                     if (!wide) IconButton(onClick = { agentsHome = !agentsHome }) {
                         Icon(Icons.Default.SmartToy, "Agents", tint = if (agentsHome) Theme.accent else Theme.dim)
                     }
@@ -816,7 +822,7 @@ private fun Composer(
     onFocus: (Boolean) -> Unit, onPaste: () -> Unit, target: () -> herdr.app.term.TerminalController?,
 ) {
     DisposableEffect(address) { onDispose { onFocus(false) } }
-    var sending by remember { mutableStateOf(false) }
+    var sending by remember(address) { mutableStateOf(false) }
     val draft = session.drafts[address] ?: ""
     val app = session.agents().firstOrNull { it.address == address }?.app ?: ""
     val slash = if (app.contains("codex", ignoreCase = true)) listOf("/new", "/model", "/approvals", "/diff", "/status", "/compact")

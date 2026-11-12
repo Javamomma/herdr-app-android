@@ -83,10 +83,7 @@ class CoreClient private constructor(
     val hello: JsonObject,
     private val onClose: () -> Unit,
 ) {
-    /** One frame to write; [ack] (for typed input) learns whether it went out. */
-    private class Out(val bytes: ByteArray, val ack: CompletableFuture<SendOutcome>? = null)
-
-    private val queue = LinkedBlockingQueue<Out>()
+    private val queue = LinkedBlockingQueue<ByteArray>()
     private val nextId = AtomicLong(1)
     private val replies = ConcurrentHashMap<Long, CompletableFuture<JsonElement>>()
     private val streams = ConcurrentHashMap<Int, StreamListener>()
@@ -133,20 +130,14 @@ class CoreClient private constructor(
 
     private fun start() {
         Thread({
-            var current: Out? = null
             try {
                 while (true) {
-                    val out = queue.take()
-                    if (out.bytes.isEmpty()) break
-                    current = out
-                    output.write(out.bytes)
-                    if (queue.isEmpty() || out.ack != null) output.flush()
-                    current = null
-                    out.ack?.complete(SendOutcome.Accepted)
+                    val bytes = queue.take()
+                    if (bytes.isEmpty()) break
+                    output.write(bytes)
+                    if (queue.isEmpty()) output.flush()
                 }
             } catch (_: Exception) {
-                // Cut off mid-write: it may or may not have gone out.
-                current?.ack?.complete(SendOutcome.Unknown)
             }
             shutdown()
         }, "hc-writer").apply { isDaemon = true }.start()
@@ -203,11 +194,8 @@ class CoreClient private constructor(
             automaticInput.clear()
             l to lostListeners.toList()
         }
-        while (true) {
-            val unsent = queue.poll() ?: break
-            unsent.ack?.complete(SendOutcome.Rejected)
-        }
-        queue.offer(Out(ByteArray(0)))
+        queue.clear()
+        queue.offer(ByteArray(0))
         for (r in replies.values) r.completeExceptionally(CoreLostException("lost the core", afterWrite = true))
         replies.clear()
         for (l in listeners) runCatching { l.onLost() }
@@ -226,7 +214,7 @@ class CoreClient private constructor(
     fun close() = shutdown()
 
     fun send(channel: Int, kind: Int, payload: ByteArray) {
-        if (!closed) queue.offer(Out(encodeFrame(channel, kind, payload)))
+        if (!closed) queue.offer(encodeFrame(channel, kind, payload))
     }
 
     /** A JSON-RPC call on channel 0; blocks the calling thread (never call it on the UI thread). */
@@ -291,19 +279,6 @@ class CoreClient private constructor(
 
     fun input(channel: Int, bytes: ByteArray) {
         if (bytes.isNotEmpty()) send(channel, Kind.DATA, bytes)
-    }
-
-    /**
-     * Like [input], but says what became of it: [SendOutcome.Accepted] once the
-     * bytes are written and flushed to the link, [SendOutcome.Rejected] when
-     * nothing was written, [SendOutcome.Unknown] when the link broke mid-write.
-     */
-    fun inputAwait(channel: Int, bytes: ByteArray): CompletableFuture<SendOutcome> {
-        val ack = CompletableFuture<SendOutcome>()
-        if (bytes.isEmpty()) ack.complete(SendOutcome.Accepted)
-        else if (closed) ack.complete(SendOutcome.Rejected)
-        else queue.offer(Out(encodeFrame(channel, Kind.DATA, bytes), ack))
-        return ack
     }
 
     /** Terminal-generated replies (answers to the program's queries), not typing. */

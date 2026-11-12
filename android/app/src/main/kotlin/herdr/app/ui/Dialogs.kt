@@ -89,7 +89,7 @@ fun Dialogs(session: Session, kind: DialogKind, onDismiss: () -> Unit) {
             )
         }
         is DialogKind.RenameSpace -> Rename("Rename space", kind.space.name, "Empty: named after its folder", onDismiss) { session.renameSpace(kind.space.id, it) }
-        is DialogKind.RenameTab -> Rename("Rename tab", kind.tab.name, "Empty: numbered", onDismiss) { session.renameTab(kind.tab.id, it) }
+        is DialogKind.RenameTab -> Rename("Rename tab", kind.tab.name, "Empty: the agent's title, else its number", onDismiss) { session.renameTab(kind.tab.id, it) }
         is DialogKind.CloseSpace -> AlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Close ${session.spaceName(kind.space)}?") },

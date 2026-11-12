@@ -3,6 +3,7 @@
 # emulator sized like a Galaxy Z Fold 7 (inner screen unfolded, cover screen
 # folded). Run by CI after the APK builds; needs adb and a running emulator.
 set -eu
+HERE=$(dirname "$0")
 APK=${1:-app/build/outputs/apk/debug/app-debug.apk}
 OUT=${2:-screenshots}
 PKG=io.github.javamomma.herdr
@@ -18,6 +19,13 @@ adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS || true
 shot() { sleep "${2:-3}"; adb exec-out screencap -p > "$OUT/$1.png"; echo "took $1"; }
 start() { adb shell am start -W -S -n $ACT "$@" > /dev/null; }
 open() { adb shell am start -W -n $ACT "$@" > /dev/null; }
+# Taps the control with this exact label, found in a uiautomator dump.
+tap() {
+  adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1 || true
+  adb exec-out cat /sdcard/ui.xml > "$OUT/ui.xml"
+  xy=$(python3 "$HERE/ui.py" "$OUT/ui.xml" "$1") || { echo "nothing to tap: $1"; exit 1; }
+  adb shell input tap $xy
+}
 size() { adb shell wm size "$1"; adb shell wm density "$2"; }
 
 # Unfolded inner screen: 1968x2184, about 750 dp wide.
@@ -26,6 +34,11 @@ start
 shot 01-connect 4
 start --ez demo true
 shot 02-unfolded-workspace 7
+# The left panel hidden, then back for the steps after.
+tap "Show or hide the left panel"
+shot 02b-unfolded-panel-hidden 2
+tap "Show or hide the left panel"
+sleep 1
 # Codex hits a permission prompt 15 s into the demo: its notification.
 sleep 10
 adb shell cmd statusbar expand-notifications

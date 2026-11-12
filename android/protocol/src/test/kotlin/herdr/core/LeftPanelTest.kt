@@ -19,11 +19,18 @@ class LeftPanelTest {
         assertEquals(PanelToggle.CloseDrawer, LeftPanel.toggle(wide = false, drawerOpen = true))
     }
 
-    @Test fun `back closes only an open drawer`() {
-        assertTrue(LeftPanel.backCloses(wide = false, drawerOpen = true))
-        assertFalse(LeftPanel.backCloses(wide = false, drawerOpen = false))
-        assertFalse(LeftPanel.backCloses(wide = true, drawerOpen = true))
-        assertFalse(LeftPanel.backCloses(wide = true, drawerOpen = false))
+    @Test fun `back closes the panel when it is on screen`() {
+        assertTrue(LeftPanel.backCloses(wide = false, hidden = false, drawerOpen = true))
+        assertFalse(LeftPanel.backCloses(wide = false, hidden = false, drawerOpen = false))
+        assertTrue(LeftPanel.backCloses(wide = true, hidden = false, drawerOpen = false), "wide and shown: Back hides it")
+        assertFalse(LeftPanel.backCloses(wide = true, hidden = true, drawerOpen = false), "wide and hidden: Back leaves the app")
+    }
+
+    @Test fun `open says what the button's icon shows`() {
+        assertTrue(LeftPanel.open(wide = true, hidden = false, drawerOpen = false))
+        assertFalse(LeftPanel.open(wide = true, hidden = true, drawerOpen = false))
+        assertTrue(LeftPanel.open(wide = false, hidden = true, drawerOpen = true))
+        assertFalse(LeftPanel.open(wide = false, hidden = false, drawerOpen = false))
     }
 
     @Test fun `drawer swipe is on only while open`() {

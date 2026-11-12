@@ -11,7 +11,7 @@ import herdr.app.Session
 import herdr.app.Theme
 import herdr.core.CoreClient
 import herdr.core.SendOutcome
-import herdr.core.sendInput
+import herdr.core.sendMessage
 import herdr.core.StreamListener
 import herdr.core.get
 import herdr.core.str
@@ -157,23 +157,13 @@ class TerminalController(context: Context, val address: String, private val sess
     }
 
     /**
-     * A message from the Type composer: pasted as one piece, then Enter.
-     * [done] hears (on the UI thread) what became of it; never resent here.
+     * A message from the Type composer: the core pastes it as one piece, then presses Enter.
+     * [done] hears (on the UI thread) what the core made of it; never resent here.
      */
     fun submit(text: String, done: (SendOutcome) -> Unit) {
         val core = attachedTo
-        val chn = channel
-        val bracketed = synchronized(emu) { emu.bracketedPaste }
         thread(name = "hc-submit", isDaemon = true) {
-            var outcome = SendOutcome.Accepted
-            if (text.isNotEmpty()) outcome = sendInput(core, chn, Keys.paste(text, bracketed).toByteArray(Charsets.UTF_8))
-            if (outcome == SendOutcome.Accepted) {
-                // Let the program take the paste before the Enter that sends it.
-                if (text.isNotEmpty()) Thread.sleep(60)
-                val enter = sendInput(core, chn, "\r".toByteArray())
-                // The text already went in: a failed Enter is "may have been sent", not "nothing happened".
-                outcome = if (enter == SendOutcome.Accepted) enter else if (text.isNotEmpty()) SendOutcome.Unknown else enter
-            }
+            val outcome = sendMessage(core, address, text)
             ui.post {
                 if (outcome == SendOutcome.Accepted) view.scrollToBottom()
                 done(outcome)

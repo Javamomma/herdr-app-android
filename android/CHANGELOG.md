@@ -3,15 +3,15 @@
 ## [Unreleased]
 
 ### New
-- The left panel can be hidden at every width, and Back closes it.
+- The left panel can be hidden at every width with one tap, and Back hides it. Folded, it opens with the button (swiping from the edge is off, so sideways drags stay with the terminal).
 - Paste sits beside Esc and goes to the box you are typing in; it says "Nothing to paste" when the clipboard has no text.
-- Unnamed tabs show their agent's title.
+- Unnamed tabs show their agent's title, else their number.
 
 ### Fixed
 - Multi-line text from the keyboard is sent as one paste instead of line by line.
 - Long-pressing older text in the terminal no longer closes the app.
 - Copy with nothing selected leaves the clipboard alone.
-- Send keeps your draft unless the message was delivered, and says what happened.
+- Send keeps your draft unless the Mac confirmed it, and says what happened: not sent, or maybe sent.
 - Answer buttons only answer the question that was shown.
 
 ## [0.2.0] - 2026-11-09

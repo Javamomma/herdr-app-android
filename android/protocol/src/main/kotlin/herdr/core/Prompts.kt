@@ -93,17 +93,29 @@ object Prompts {
         val block = block(lines)
         val choices = choices(block)
         val above = if (block.isEmpty()) lines else lines.subList(0, block.first().first)
-        val context = above.map(::clean).filter { it.isNotBlank() }
-        val text = context.takeLast(if (block.isEmpty()) 8 else 6)
-        // The prompt's own block (up to the rule or box edge above its options) can be longer than the text
-        // shown: two long commands that end in the same lines must still differ, in mark and in danger.
-        val own = if (block.isEmpty()) emptyList() else ownLines(above)
-        val covered = own.ifEmpty { text }
+        val cleaned = above.map(::clean)
+        val shown = cleaned.indices.filter { cleaned[it].isNotBlank() }
+        val tail = shown.takeLast(if (block.isEmpty()) 8 else 6)
+        val text = tail.map { cleaned[it] }
+        // The mark and the danger check read the last lines shown, extended upward to the prompt's own block
+        // (up to the rule or box edge above its options): two long commands that end in the same lines, or
+        // that a rule separates from the question, must still differ, in mark and in danger.
+        val rule = if (block.isEmpty()) -1 else above.indexOfLast(::isRule)
+        // A box's top edge is a firm start (what is outside the box may change without the question changing);
+        // a plain rule only extends the cover upward when it is further up than the last lines.
+        val boxTop = rule >= 0 && above[rule].any { it in "╭┌╔┏" }
+        val first = tail.firstOrNull() ?: 0
+        val start = when {
+            rule < 0 -> first
+            boxTop -> rule + 1
+            else -> minOf(first, rule + 1)
+        }
+        val covered = shown.filter { it >= start }.map { cleaned[it] }.takeLast(MARK_LINES)
         val all = covered + choices.map { "${if (it.selected) '>' else '.'}${it.number}.${it.label}" }
         // No whitespace in the hash: the same text wrapped differently keeps its mark.
         val digest = java.security.MessageDigest.getInstance("SHA-256")
             .digest(all.joinToString("").filter { !it.isWhitespace() }.toByteArray())
-        val joined = (covered + text).joinToString("\n")
+        val joined = covered.joinToString("\n")
         return Question(
             text = text,
             choices = choices,
@@ -112,19 +124,10 @@ object Prompts {
         )
     }
 
+    /** A line of box-drawing characters only (a rule or box edge); `---` or `====` in content is not one. */
     private fun isRule(line: String): Boolean {
         val t = line.trim()
-        return t.length >= 3 && t.all { it in '\u2500'..'\u257F' || it == '-' || it == '=' || it == '_' }
-    }
-
-    /**
-     * The cleaned lines between the nearest rule/box edge above the options and
-     * the options, at most [MARK_LINES]; empty when there is no such line.
-     */
-    private fun ownLines(above: List<String>): List<String> {
-        val rule = above.indexOfLast(::isRule)
-        if (rule < 0) return emptyList()
-        return above.subList(rule + 1, above.size).map(::clean).filter { it.isNotBlank() }.takeLast(MARK_LINES)
+        return t.length >= 3 && t.all { it in '\u2500'..'\u257F' }
     }
 
     /**

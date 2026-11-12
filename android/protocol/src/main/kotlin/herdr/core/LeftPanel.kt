@@ -23,8 +23,11 @@ object LeftPanel {
     fun toggle(wide: Boolean, drawerOpen: Boolean): PanelToggle =
         if (wide) PanelToggle.FlipSaved else if (drawerOpen) PanelToggle.CloseDrawer else PanelToggle.OpenDrawer
 
-    /** Back closes only an open drawer; a panel shown side by side never swallows Back. */
-    fun backCloses(wide: Boolean, drawerOpen: Boolean): Boolean = !wide && drawerOpen
+    /** The panel is on screen: beside the terminal, or as an open drawer. */
+    fun open(wide: Boolean, hidden: Boolean, drawerOpen: Boolean): Boolean = if (wide) besideShown(wide, hidden) else drawerOpen
+
+    /** Back closes the panel when it is on screen (wide: hides it, like the button); only the next Back leaves the app. */
+    fun backCloses(wide: Boolean, hidden: Boolean, drawerOpen: Boolean): Boolean = open(wide, hidden, drawerOpen)
 
     /** The drawer's swipe is on only while it is open (to swipe it shut); sideways drags on the terminal stay the terminal's. */
     fun drawerGestures(drawerOpen: Boolean): Boolean = drawerOpen
