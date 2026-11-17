@@ -80,6 +80,18 @@ From the 2026-11-12 repair build. Read before changing these paths.
   do. Hidden/shown on the wide layout is a phone preference
   (`view` prefs, `sidebarHidden`), never part of the shared layout document.
   The drawer's swipe-to-open is off so sideways drags stay with the terminal.
+- **Watching** (`Watch` in `protocol/`, `TerminalController`): a terminal opens as an
+  observer (`terminal.attach` with `observe` + `resize_notifications`), so the
+  Mac keeps its size. The core sends the size (a RESIZE frame) before the
+  paint and ignores an observer's typing and size; the view scales the grid to
+  fit (`Watch.fit`, text no smaller than 6 sp, bottom-left kept in view, sideways
+  drag pans). The first typing, keyboard or key-row key calls `takeControl`:
+  detach, reattach as a typing viewer at the phone's grid, then send what was
+  typed meanwhile (`held`, at most 64 KB). Type box and answers are core calls
+  and need no control. Not watched: cores without `resize_notifications`
+  (before 0.1.17), the setting off, and terminals at the core's headless size
+  (200×120: no window shows them). Rejected: watching only on the cover
+  screen, or scaling up small grids.
 - **Scrollback lines are trimmed**: `Line.text(col)` returns a blank past the
   end; use `Emulator.wordAt` for word selection.
 - Decisions and user-facing notices that need tests live in `protocol/` and

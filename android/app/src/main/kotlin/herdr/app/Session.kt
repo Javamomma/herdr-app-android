@@ -184,6 +184,9 @@ class Session(private val context: Context) {
     /** On the cover screen, open to the agents list. */
     var agentsWhenFolded by mutableStateOf(settings.getBoolean("agentsFolded", true))
         private set
+    /** Open terminals watching (the Mac keeps its size) until the phone types in them. */
+    var watchFirst by mutableStateOf(settings.getBoolean("watchFirst", true))
+        private set
     var snippets by mutableStateOf(loadSnippets())
         private set
     /** Running against the built-in pretend core (no Mac). */
@@ -275,6 +278,7 @@ class Session(private val context: Context) {
     fun updateLock(on: Boolean) { lockEnabled = on; settings.edit().putBoolean("lock", on).apply(); onLock?.invoke(on) }
     fun updateLockAfter(minutes: Int) { lockAfterMinutes = minutes; settings.edit().putInt("lockAfter", minutes).apply() }
     fun updateAgentsWhenFolded(on: Boolean) { agentsWhenFolded = on; settings.edit().putBoolean("agentsFolded", on).apply() }
+    fun updateWatchFirst(on: Boolean) { watchFirst = on; settings.edit().putBoolean("watchFirst", on).apply() }
 
     private fun loadSnippets(): List<Snippet> {
         val saved = settings.getString("snippets", null) ?: return listOf(

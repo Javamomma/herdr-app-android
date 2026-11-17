@@ -9,11 +9,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import herdr.app.Session
 import herdr.app.Theme
+import herdr.core.AttachMode
 import herdr.core.CoreClient
 import herdr.core.SendOutcome
 import herdr.core.sendMessage
 import herdr.core.StreamListener
+import herdr.core.Watch
 import herdr.core.get
+import herdr.core.long
 import herdr.core.str
 import herdr.term.Emulator
 import herdr.term.Key
@@ -27,6 +30,11 @@ import kotlin.concurrent.thread
  * stream and drawn by a native [TerminalView]. Bytes are parsed on the
  * connection's reader thread under the emulator's lock, credited back once
  * parsed, and the view redraws at most once per display frame.
+ *
+ * A terminal starts watched ([watching]): attached as an observer, drawn at the
+ * Mac's size and never resizing it. The first keystroke, paste or keyboard
+ * opening takes control: the stream is reattached as a typing viewer, the
+ * terminal takes the phone's size, and what was typed meanwhile follows.
  */
 class TerminalController(context: Context, val address: String, private val session: Session, var fontPx: Int, private val onFont: (Int) -> Unit) {
     private val ui = Handler(Looper.getMainLooper())
@@ -41,6 +49,16 @@ class TerminalController(context: Context, val address: String, private val sess
     private val pendingReplies = java.io.ByteArrayOutputStream()
     private var attaching = false
     private var focusedHere = false
+    /** The person typed here: stay a typing viewer until this view is released. */
+    private var tookControl = false
+    /** The core attached us as an observer but wouldn't say the size: don't try watching again. */
+    private var cannotWatch = false
+    /** Watching → control in progress: typing waits in [held] for the new channel (UI thread only). */
+    private var switching = false
+    private val held = java.io.ByteArrayOutputStream()
+    /** Attached as an observer: the Mac's size, nothing typed (see [herdr.core.Watch]). */
+    var watching by mutableStateOf(false)
+        private set
     /** Why the stream ended (null while attached). */
     var ended by mutableStateOf<String?>(null)
         private set
@@ -62,6 +80,12 @@ class TerminalController(context: Context, val address: String, private val sess
         this.cell = cell
         if (grid == cols to rows && !cellChanged) return
         grid = cols to rows
+        if (watching) {
+            // The terminal keeps the Mac's size; this grid is for when typing takes control.
+            if (channel == null) attach()
+            view.invalidate()
+            return
+        }
         synchronized(emu) { emu.resize(cols, rows) }
         val core = attachedTo
         val chn = channel
@@ -130,6 +154,12 @@ class TerminalController(context: Context, val address: String, private val sess
 
     fun send(text: String) {
         if (text.isEmpty()) return
+        if (watching || switching) {
+            val bytes = text.toByteArray(Charsets.UTF_8)
+            if (held.size() + bytes.size <= Watch.HOLD_LIMIT) held.write(bytes)
+            takeControl()
+            return
+        }
         val core = attachedTo ?: return
         val chn = channel ?: return
         core.input(chn, text.toByteArray(Charsets.UTF_8))
@@ -161,7 +191,8 @@ class TerminalController(context: Context, val address: String, private val sess
      * [done] hears (on the UI thread) what the core made of it; never resent here.
      */
     fun submit(text: String, done: (SendOutcome) -> Unit) {
-        val core = attachedTo
+        // A core call, not typing: works while watching, and while typing is taking control.
+        val core = attachedTo ?: session.core
         thread(name = "hc-submit", isDaemon = true) {
             val outcome = sendMessage(core, address, text)
             ui.post {
@@ -186,6 +217,31 @@ class TerminalController(context: Context, val address: String, private val sess
 
     // ---- the core stream ---------------------------------------------------------
 
+    /**
+     * Stops watching: reattaches as a typing viewer, so the terminal takes this
+     * phone's size. Called on the first typing and when the keyboard opens here.
+     */
+    fun takeControl() {
+        if (!watching) return
+        tookControl = true
+        switching = true
+        watching = false
+        val core = attachedTo
+        val chn = channel
+        token++ // frames still arriving for the watching stream are no longer ours
+        attaching = false
+        channel = null
+        attachedTo = null
+        if (core != null && chn != null) core.detach(chn)
+        attach()
+        if (!attaching) stopSwitching() // not connected: nothing will take what was typed
+    }
+
+    private fun stopSwitching() {
+        switching = false
+        held.reset()
+    }
+
     /** Attaches if not attached to the current core (a new connection, a restarted terminal). */
     fun attach() {
         val core = session.core ?: return
@@ -193,16 +249,30 @@ class TerminalController(context: Context, val address: String, private val sess
         if (attaching || (channel != null && attachedTo === core)) return
         attaching = true
         val mine = ++token
+        val rec = session.terminals[address]
+        val nobodySizing = Watch.nobodySizing(rec?.get("cols").long, rec?.get("rows").long)
+        val observe = Watch.startMode(session.watchFirst, core.features, tookControl || cannotWatch, nobodySizing) == AttachMode.Watch
+        watching = observe
         channel = null
         attachedTo = null
         pendingCredit = 0
         synchronized(pendingReplies) { pendingReplies.reset() }
-        // The core's first paint is the whole screen plus history: start clean.
-        synchronized(emu) { emu.clearAll() }
+        // The core's first paint is the whole screen plus history: start clean, at the size it
+        // paints. Watching, that is the Mac's size, which arrives first (onResize).
+        synchronized(emu) {
+            emu.clearAll()
+            if (!observe) emu.resize(cols, rows)
+        }
         view.invalidate()
         val display = Theme.display(cell)
         thread(name = "attach-$address") {
             val listener = object : StreamListener {
+                override fun onResize(cols: Int, rows: Int) {
+                    if (token != mine) return
+                    synchronized(emu) { emu.resize(cols, rows) }
+                    view.postInvalidateOnAnimation()
+                }
+
                 override fun onData(bytes: ByteArray) {
                     if (token != mine) return
                     val replies = synchronized(emu) {
@@ -238,8 +308,10 @@ class TerminalController(context: Context, val address: String, private val sess
                 }
             }
             try {
-                val a = core.attach(address, cols, rows, display, listener)
-                if (token == mine) {
+                val a = core.attach(address, cols, rows, display, listener, observe)
+                if (token != mine) {
+                    core.detach(a.channel) // replaced while attaching (typing took control, or released)
+                } else {
                     attachedTo = core
                     channel = a.channel
                     val owed = pendingCredit
@@ -249,16 +321,37 @@ class TerminalController(context: Context, val address: String, private val sess
                     if (early.isNotEmpty()) core.automaticInput(a.channel, early)
                 }
                 ui.post {
-                    attaching = false
                     if (token != mine) return@post
+                    attaching = false
                     ended = null
+                    if (observe && !a.observing) {
+                        // An observer that never hears the size would draw the Mac's screen on the phone's grid.
+                        cannotWatch = true
+                        watching = false
+                        core.detach(a.channel)
+                        channel = null
+                        attachedTo = null
+                        attach()
+                        return@post
+                    }
+                    if (!observe) {
+                        if (switching) {
+                            switching = false
+                            val typed = held.toByteArray().also { held.reset() }
+                            if (typed.isNotEmpty()) {
+                                core.input(a.channel, typed)
+                                view.scrollToBottom()
+                            }
+                        }
+                        grid?.let { (c, r) -> if (c != cols || r != rows) core.resize(a.channel, c, r) }
+                    }
                     if (focusedHere) core.focus(a.channel, true)
-                    grid?.let { (c, r) -> if (c != cols || r != rows) core.resize(a.channel, c, r) }
                 }
             } catch (e: Exception) {
                 ui.post {
-                    attaching = false
                     if (token != mine) return@post
+                    attaching = false
+                    stopSwitching()
                     ended = e.message ?: "cannot attach"
                     synchronized(emu) { emu.write("\r\n\u001b[2m[cannot attach: ${e.message}]\u001b[0m\r\n") }
                     view.invalidate()

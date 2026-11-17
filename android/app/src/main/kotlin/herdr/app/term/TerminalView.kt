@@ -16,6 +16,8 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.widget.OverScroller
+import herdr.core.Fit
+import herdr.core.Watch
 import herdr.term.Attr
 import herdr.term.Color
 import herdr.term.CursorShape
@@ -77,6 +79,23 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
         invalidate()
     }
 
+    /**
+     * Watching, the Mac's grid scaled into this view; otherwise drawn as is. Text
+     * stops shrinking at [MIN_WATCH_SP]. Call with the emulator locked.
+     */
+    private fun fit(): Fit {
+        if (!term.watching || width == 0 || height == 0) return NO_FIT
+        val minScale = MIN_WATCH_SP / term.fontPx.coerceAtLeast(1)
+        val f = Watch.fit(width.toFloat(), height.toFloat(), pad, cellW, cellH, emu.cols, emu.rows, minScale)
+        // Wider than the view even at the smallest text: a sideways drag pans it.
+        val maxPan = (2 * pad + emu.cols * cellW - width / f.scale).coerceAtLeast(0f)
+        panX = panX.coerceIn(0f, maxPan)
+        return if (panX == 0f) f else f.copy(dx = f.dx - f.scale * panX)
+    }
+
+    /** Watching a grid wider than the view: how far it is panned right, in unscaled pixels. */
+    private var panX = 0f
+
     /** Cell size in device pixels, for the core's display facts. */
     fun cell(): IntArray = intArrayOf(cellW.roundToInt(), cellH.roundToInt())
 
@@ -105,6 +124,11 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
             val defBg = if (reverse) Palette.FG else Palette.BG
             val defFg = if (reverse) Palette.BG else Palette.FG
             canvas.drawColor(defBg)
+            val f = fit()
+            canvas.save()
+            canvas.translate(f.dx, f.dy)
+            canvas.scale(f.scale, f.scale)
+            val bottom = f.toContentY(height.toFloat())
             val history = emu.historySize
             // New lines arriving while scrolled up keep what's on screen in place.
             if (scrollPx > 0f && history > lastHistory) scrollPx += (history - lastHistory) * cellH
@@ -116,15 +140,16 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
                 val idx = first + k
                 val line = emu.lineAt(idx) ?: continue
                 val y = pad + (idx - topF) * cellH
-                if (y > height) break
+                if (y > bottom) break
                 drawLine(canvas, line, idx, y, defFg, defBg)
             }
             if (emu.cursorVisible) {
                 val idx = history + emu.cursorRow
                 val y = pad + (idx - topF) * cellH
                 val x = pad + emu.cursorCol * cellW
-                if (y < height) drawCursor(canvas, x, y)
+                if (y < bottom) drawCursor(canvas, x, y)
             }
+            canvas.restore()
         }
     }
 
@@ -235,7 +260,10 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
 
     // ---- touch -----------------------------------------------------------------
 
-    private fun cellAt(x: Float, y: Float): Pair<Int, Int> {
+    private fun cellAt(sx: Float, sy: Float): Pair<Int, Int> {
+        val f = fit()
+        val x = f.toContentX(sx)
+        val y = f.toContentY(sy)
         val history = emu.historySize
         val topF = history - scrollPx / cellH
         val idx = floor(topF + (y - pad) / cellH).toInt().coerceIn(0, history + emu.rows - 1)
@@ -255,7 +283,10 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
         null
     }
 
-    private fun screenCell(x: Float, y: Float): Pair<Int, Int> {
+    private fun screenCell(sx: Float, sy: Float): Pair<Int, Int> {
+        val f = synchronized(emu) { fit() }
+        val x = f.toContentX(sx)
+        val y = f.toContentY(sy)
         val col = floor((x - pad) / cellW).toInt().coerceIn(0, emu.cols - 1)
         val row = floor((y - pad) / cellH).toInt().coerceIn(0, emu.rows - 1)
         return row to col
@@ -278,7 +309,10 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
                 term.onLink(it)
                 return true
             }
+            val wasWatching = term.watching
             showKeyboard()
+            // On a watched terminal the tap only takes control; a click there would land on the old layout.
+            if (wasWatching) return true
             val m = synchronized(emu) { emu.mouse to emu.mouseSgr }
             if (m.first != Mouse.OFF) {
                 val (row, col) = screenCell(e.x, e.y)
@@ -306,6 +340,12 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
 
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
             if (selecting) return true
+            if (term.watching && abs(dx) > abs(dy)) {
+                val scale = synchronized(emu) { fit().scale }
+                panX += dx / scale
+                invalidate()
+                return true
+            }
             scrollBy(dy, e2)
             return true
         }
@@ -313,7 +353,8 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
         override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
             if (selecting || remoteScroll() != null) return true
             val max = (emu.historySize * cellH).toInt()
-            scroller.fling(0, scrollPx.toInt(), 0, vy.toInt(), 0, 0, 0, max)
+            val scale = synchronized(emu) { fit().scale }
+            scroller.fling(0, scrollPx.toInt(), 0, (vy / scale).toInt(), 0, 0, 0, max)
             postInvalidateOnAnimation()
             return true
         }
@@ -347,7 +388,8 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
         when (remoteScroll()) {
             null -> {
                 val max = emu.historySize * cellH
-                scrollPx = (scrollPx - dy).coerceIn(0f, max)
+                val scale = synchronized(emu) { fit().scale }
+                scrollPx = (scrollPx - dy / scale).coerceIn(0f, max)
                 invalidate()
             }
             else -> {
@@ -418,6 +460,7 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
      * stays bound to the old screen: reconnect it, then ask explicitly.
      */
     fun showKeyboard() {
+        term.takeControl() // the keyboard means typing: the terminal takes this phone's size now
         if (!hasFocus()) requestFocus()
         if (!imm.isActive(this)) imm.restartInput(this)
         post { imm.showSoftInput(this, 0) }
@@ -523,6 +566,10 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
     }
 
     private companion object {
+        /** Drawn as is (not watching). */
+        val NO_FIT = Fit(1f, 0f, 0f)
+        /** The smallest text a watched terminal shrinks to, in sp; past it the bottom-left stays in view. */
+        const val MIN_WATCH_SP = 6f
         const val KeyCharacterMapCombining = android.view.KeyCharacterMap.COMBINING_ACCENT
         val URL = Regex("""https?://[^\s<>"'`│]+""")
         val PATH = Regex("""(?<![\w.~/])(?:~|\.{1,2})?/[\w.@-]+(?:/[\w.@-]+)*(?::\d+)?|\b[\w.@-]+(?:/[\w.@-]+)*\.(?:kt|kts|rs|ts|tsx|js|jsx|py|go|md|json|toml|yaml|yml|java|swift|c|h|cpp|sh|rb|css|html|txt|lock)(?::\d+)?\b""")

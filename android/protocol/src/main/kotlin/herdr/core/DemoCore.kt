@@ -27,6 +27,10 @@ class DemoCore {
     private var nextTerminal = 20
     private var eventsChannel = -1
     private val attached = HashMap<Int, String>()
+    /** Channels attached with `observe`: their typing and sizes don't count. */
+    private val observers = HashSet<Int>()
+    /** Sizes typing viewers asked for, in order (observers never appear here). */
+    val typingSizes = java.util.concurrent.CopyOnWriteArrayList<Pair<Int, Int>>()
     private val docs = HashMap<String, Pair<JsonElement, Long>>()
     private val terminals = LinkedHashMap<String, JsonObject>()
     @Volatile var closed = false
@@ -219,13 +223,14 @@ class DemoCore {
         try {
             readLine(coreIn) ?: return
             val methods = USES + listOf("machine.list", "machine.exec", "file.read", "terminal.send", "terminal.keys", "terminal.get")
-            val hello = obj("jsonrpc" to "2.0", "id" to 0, "result" to obj("generation" to GENERATION, "version" to "0.2.0-demo", "methods" to methods, "features" to listOf("automatic_input"), "framed" to true))
+            val hello = obj("jsonrpc" to "2.0", "id" to 0, "result" to obj("generation" to GENERATION, "version" to "0.2.0-demo", "methods" to methods, "features" to listOf("automatic_input", Watch.FEATURE), "framed" to true))
             synchronized(lock) { coreOut.write((hello.toString() + "\n").toByteArray()); coreOut.flush() }
             while (!closed) {
                 val f = readFrame(coreIn) ?: break
                 if (f.channel == 0) handle(json.parseToJsonElement(f.payload.decodeToString()).jsonObject)
-                else if (f.kind == Kind.DATA) attached[f.channel]?.let { echo(f.channel, f.payload) }
-                else if (f.kind == Kind.CLOSE) { attached.remove(f.channel); write(f.channel, Kind.CLOSE, ByteArray(0)) }
+                else if (f.kind == Kind.DATA && f.channel !in observers) attached[f.channel]?.let { echo(f.channel, f.payload) }
+                else if (f.kind == Kind.RESIZE && f.channel !in observers) sizeOf(f.payload)?.let { typingSizes.add(it) }
+                else if (f.kind == Kind.CLOSE) { attached.remove(f.channel); observers.remove(f.channel); write(f.channel, Kind.CLOSE, ByteArray(0)) }
             }
         } catch (_: Exception) {
         }
@@ -271,7 +276,12 @@ class DemoCore {
                 val r = terminals[t] ?: return error(id, "no terminal $t", "not_found")
                 val ch = nextChannel++
                 attached[ch] = t
-                reply(id, obj("channel" to ch, "terminal" to r, "automatic_input" to true))
+                // Like herdr-core: an observer never resizes; with resize_notifications it hears the size first.
+                val observe = p["observe"].bool == true
+                val notify = observe && p["resize_notifications"].bool == true
+                if (observe) observers.add(ch) else typingSizes.add((p["cols"].long?.toInt() ?: 0) to (p["rows"].long?.toInt() ?: 0))
+                reply(id, obj("channel" to ch, "terminal" to r, "automatic_input" to true, "resize_notifications" to notify))
+                if (notify) write(ch, Kind.RESIZE, resizePayload(r["cols"].long?.toInt() ?: 100, r["rows"].long?.toInt() ?: 30))
                 write(ch, Kind.DATA, ("$esc[H$esc[2J" + screen(t)).toByteArray())
             }
             "terminal.run" -> {

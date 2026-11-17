@@ -152,6 +152,7 @@ fun SettingsDialog(session: Session, pool: TerminalPool, onDismiss: () -> Unit, 
                     Slider(value = session.lockAfterMinutes.toFloat(), onValueChange = { session.updateLockAfter(it.toInt()) }, valueRange = 0f..30f, steps = 5)
                 }
                 Toggle("Folded: open to agents", "The cover screen starts on the agents list", session.agentsWhenFolded) { session.updateAgentsWhenFolded(it) }
+                Toggle("Watch without resizing the Mac", "Terminals keep the Mac's size until you type in them", session.watchFirst) { session.updateWatchFirst(it) }
                 Text("Terminal text: ${font.toInt()} px", fontSize = 13.sp)
                 Slider(value = font, onValueChange = { font = it }, valueRange = 8f..24f, steps = 15, onValueChangeFinished = {
                     pool.fontSize = font.toInt()

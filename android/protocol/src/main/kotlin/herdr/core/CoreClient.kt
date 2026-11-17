@@ -42,6 +42,8 @@ class CoreLostException(message: String, val afterWrite: Boolean = false) : Exce
 /** Receives one channel's frames, on the connection's reader thread. */
 interface StreamListener {
     fun onData(bytes: ByteArray)
+    /** An observer heard the terminal's size (first, and whenever it changes); a repaint follows. */
+    fun onResize(cols: Int, rows: Int) {}
     /** The core ended the stream; [reason] says why (e.g. the program exited). */
     fun onClosed(reason: JsonElement)
     /** The connection dropped. The program most likely still runs: reattach later. */
@@ -51,6 +53,7 @@ interface StreamListener {
 private sealed interface Early {
     class Data(val bytes: ByteArray) : Early
     class Closed(val reason: JsonElement) : Early
+    class Resize(val cols: Int, val rows: Int) : Early
 }
 
 fun semver(v: String): Triple<Long, Long, Long> {
@@ -166,6 +169,7 @@ class CoreClient private constructor(
         val item = when (frame.kind) {
             Kind.DATA -> Early.Data(frame.payload)
             Kind.CLOSE -> Early.Closed(runCatching { json.parseToJsonElement(frame.payload.decodeToString()) }.getOrDefault(JsonNull))
+            Kind.RESIZE -> sizeOf(frame.payload)?.let { (c, r) -> Early.Resize(c, r) } ?: return
             else -> return
         }
         val listener = synchronized(lock) {
@@ -183,6 +187,7 @@ class CoreClient private constructor(
     private fun deliver(l: StreamListener, item: Early) = when (item) {
         is Early.Data -> l.onData(item.bytes)
         is Early.Closed -> l.onClosed(item.reason)
+        is Early.Resize -> l.onResize(item.cols, item.rows)
     }
 
     private fun shutdown() {
@@ -263,18 +268,24 @@ class CoreClient private constructor(
         return channel to result
     }
 
-    class Attached(val channel: Int, val terminal: JsonElement)
+    /** [observing]: attached as an observer that hears the terminal's size (it never resizes it or types). */
+    class Attached(val channel: Int, val terminal: JsonElement, val observing: Boolean = false)
 
-    /** Attaches to a terminal's screen; the first paint and its output arrive on [listener]. */
-    fun attach(terminal: String, cols: Int, rows: Int, display: JsonObject, listener: StreamListener): Attached {
+    /**
+     * Attaches to a terminal's screen; the first paint and its output arrive on [listener].
+     * [observe]: watch only (needs [Watch.FEATURE]); the core then tells [StreamListener.onResize]
+     * the terminal's size before the first paint, and ignores this viewer's typing and size.
+     */
+    fun attach(terminal: String, cols: Int, rows: Int, display: JsonObject, listener: StreamListener, observe: Boolean = false): Attached {
+        val watch: Boolean? = if (observe) true else null // omitted, not false, for a typing viewer
         val result = call(
             "terminal.attach",
-            obj("terminal" to terminal, "cols" to cols, "rows" to rows, "history" to 2000, "display" to display),
+            obj("terminal" to terminal, "cols" to cols, "rows" to rows, "history" to 2000, "display" to display, "observe" to watch, "resize_notifications" to watch),
         )
         val channel = result["channel"].long?.toInt() ?: throw IllegalStateException("attach returned no channel")
         if ("automatic_input" in features && result["automatic_input"].bool == true) automaticInput.add(channel)
         register(channel, listener)
-        return Attached(channel, result["terminal"] ?: JsonNull)
+        return Attached(channel, result["terminal"] ?: JsonNull, observing = observe && result["resize_notifications"].bool == true)
     }
 
     fun input(channel: Int, bytes: ByteArray) {

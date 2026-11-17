@@ -6,6 +6,7 @@
 - The left panel can be hidden at every width with one tap, and Back hides it. Folded, it opens with the button (swiping from the edge is off, so sideways drags stay with the terminal).
 - Paste sits beside Esc and goes to the box you are typing in; it says "Nothing to paste" when the clipboard has no text.
 - Unnamed tabs show their agent's title, else their number.
+- Looking at a terminal no longer resizes it on the Mac. The phone watches it at the Mac's size, shrunk to fit (drag sideways when it is wider than the screen), with "Watching · tap to type" in the corner. Tapping it, opening the keyboard or pressing a key takes it over at the phone's size, as before. Sending from the Type box and answer buttons work while watching. Turn it off in Settings: "Watch without resizing the Mac". Needs herdr-core 0.1.17 or newer; older cores, and terminals no window is showing, open as before.
 
 ### Fixed
 - Multi-line text from the keyboard is sent as one paste instead of line by line.

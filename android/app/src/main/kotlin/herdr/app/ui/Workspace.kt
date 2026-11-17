@@ -700,6 +700,15 @@ fun TerminalBox(pool: TerminalPool, address: String, onTouch: () -> Unit) {
             },
             modifier = Modifier.fillMaxSize(),
         )
+        if (ctl.watching && ctl.selection.isEmpty()) {
+            // Not clickable, so touches reach the terminal under it.
+            Text(
+                "Watching · tap to type",
+                color = Theme.dim, fontSize = 11.sp,
+                modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
+                    .background(Theme.raised.copy(alpha = 0.85f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+        }
         if (ctl.selection.isNotEmpty()) {
             val clipboard = LocalClipboardManager.current
             Row(
