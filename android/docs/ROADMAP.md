@@ -27,7 +27,8 @@ exact steps.
   a loose copy; Claude reviews and merges it.
 - **Tests first where they're cheap:** the protocol and terminal engine are
   plain Kotlin with JVM tests; the app is checked by building and by the demo
-  screenshots on Fold-sized emulators.
+  screenshots on Fold-sized emulators; the emulator job also runs
+  `scripts/safety-check.sh` on pull requests that touch code.
 - **Releases** are tags (`vX.Y.Z`) with a CHANGELOG section; releases are
   paused for now (see RELEASING.md). Test builds share one debug key and install over each other.
 - **Commits:** lowercase conventional commits, one line.
@@ -39,51 +40,49 @@ live with the desktop app; agents list; notifications with Allow / Deny /
 Reply; native terminal; Type box; saved commands; cover-screen agents view;
 widget; app lock; network-change reconnect; demo mode; CI screenshots.
 
-Waiting on the founder: the release signing secrets (RELEASING.md), and
-asking Can whether the name is fine (docs/LAUNCH.md).
+Releases are paused (RELEASING.md, docs/LAUNCH.md); there is no public
+release.
 
 ## The landscape (November 2026)
 
-Other Android apps for Herdr. All of them drive **herdr**, the terminal agent
-multiplexer, through its socket API (`herdr pane …`, `herdr session …`). None
-of them speak **herdr-core**, which the Herdr 2 desktop app runs on, so none
-share the desktop app's spaces, tabs and splits.
+The owner reports that the official Herdr app shipped on 2026-11-09/10 and
+speaks herdr-core over SSH (not verified by the 2026-11-12 audit). This app
+has no public release and is Arshia's own client, built for his Galaxy Z
+Fold 7. The official app's public description, as the audit read it, is: see which agents need you, open the real terminal,
+type, paste a screenshot, talk to it. Nobody has run it yet, so whether it
+covers his terminal work, the Fold's two screens and safe answering is
+unknown. Try it before investing in attachments, speech or new terminal
+features here.
 
-| App | What it is | Notable |
-|---|---|---|
-| Herdr Mobile (`dev.herdr.mobile`, tuan3w/herdr-mobile, GPL-3.0, Flutter) | Agent board over SSH to many machines | One-tap answers parsed from the agent's question, risky answers need a hold; chat view over ACP; SFTP file viewer; stale-while-loading state; in-app updates; read-only terminal text that can't resize |
-| Mussh (`app.mussh`, Coachlog Labs, paid unlock) | Separate chats per agent, Android and iPhone | 27 agents, approval cards, diffs; needs herdr for chat |
-| Sherpr (F-Droid) | Herdr companion over SSH | Notifications, optional foreground service, no Google services |
-| Moshi, Terminal Spike | SSH/Mosh terminals with herdr/tmux support | Mosh, tmux session pickers |
+What this app keeps for itself: his queue (below), the two Fold layouts
+(cover and inner), and answers from notifications.
 
-**What we have that they don't:** built for Herdr 2: the same spaces, tabs
-and splits as the desktop window, live in both directions; a full
-interactive terminal (real VT engine, resizes to the phone, mouse,
-scrollback) instead of read-only text; layouts built for the Fold, inner and
-cover screens; one connection reaches every machine the Mac has added;
-Apache-2.0.
-
-**Worth borrowing (as ideas, not code: theirs is GPL):**
-
-1. Answer buttons read from the agent's actual question (its options), with
-   hold-to-confirm for risky ones, instead of only Allow / Deny.
-2. The last few lines of each agent's terminal on its card.
-3. Show the last known state at once on launch, marked stale until fresh.
-4. Tappable URLs and file paths in terminal output.
-5. In-app update check against GitHub Releases.
-6. Quick phrases and a slash-command palette in the Type box.
+Other Android apps (Herdr Mobile, Mussh, Sherpr, Moshi) drive the older
+herdr socket API, not herdr-core. Their ideas were borrowed in 0.2.0.
 
 ## Next, in order
 
-1. ~~Split into its own repo~~ (undone 2026-11-10: back in `android/` of
-   github.com/Javamomma/herdr-app-android, history kept). Releases are paused;
-   there is no public release for now.
-2. ~~All six ideas above~~: built in 0.2.0 (answer buttons, previews, instant
-   stale state, tappable links and paths, update check, phrases).
-3. Check them on the Fold; tune answer parsing for more agents.
-4. Space templates: start a space with a chosen program (e.g. TUIOS) from the
-   New space dialog and saved commands.
-5. F-Droid listing; then Google Play.
+1. **Repair build**, tested on the phone: hide the left panel at every width
+   (Back closes it); Paste beside Esc, going to the box you are typing in;
+   no crash when long-pressing older terminal text; Copy with nothing
+   selected leaves the clipboard alone; Send keeps the draft unless the
+   message was delivered; answer buttons only answer the question that was
+   on screen; unnamed tabs show their agent's title.
+2. **Read-only Queue**: an optional list of what is waiting on him, from the
+   Mac's `panel.py queue` over the existing SSH session, with a stale / could
+   not load state. Actions come later, one family at a time.
+3. Small reading and reply improvements (wrapped, selectable file viewer;
+   last reply on agent cards; the helper that supplies the last reply cuts it
+   at 600 characters, so show it as an excerpt with a way to fetch the rest).
+4. A private release signing key, and trying the CI build on the phone
+   without the cable.
+
+Considered and rejected (audit 2026-11-12): public release on F-Droid or
+Google Play while the official app exists; AI summaries or any model in the
+app; a rewrite in another toolkit or a different terminal engine; a general
+panel format; replacing or splitting this app before trying the official one.
+Deferred: picture attachment, a microphone button, a whole-conversation
+view, HTML pages.
 
 ## Decisions
 
@@ -102,3 +101,6 @@ Apache-2.0.
 - 2026-11-10: That repository is retired; the app is back in the `android/`
   folder of Javamomma/herdr-app-android, the only home. Pull requests go to
   `master`. Releases are paused.
+- 2026-11-12: The official Herdr app exists and speaks herdr-core; no public
+  release of this app (F-Droid and Google Play dropped). Next: repair build,
+  then a read-only Queue.

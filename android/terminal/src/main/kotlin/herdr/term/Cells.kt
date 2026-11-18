@@ -71,10 +71,18 @@ class Line(cols: Int) {
         extra?.let { e -> e.keys.removeAll { it in from until end } }
     }
 
+    /** The cell's text; null for the tail of a wide character. Cells past a trimmed (scrollback) line's end are blanks. */
     fun text(col: Int): String? {
+        if (col < 0 || col >= chars.size) return " "
         val c = chars[col]
         if (c == WIDE_TAIL) return null
         return extra?.get(col) ?: String(Character.toChars(c))
+    }
+
+    /** Nothing but spaces in the first [cols] cells. */
+    fun isBlank(cols: Int = chars.size): Boolean {
+        for (i in 0 until minOf(cols, chars.size)) if (chars[i] != ' '.code || extra?.containsKey(i) == true) return false
+        return true
     }
 
     /** Cells after the last non-blank, default-styled one. */

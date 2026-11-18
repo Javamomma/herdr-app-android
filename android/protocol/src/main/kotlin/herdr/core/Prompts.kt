@@ -33,6 +33,9 @@ data class Question(
  * keys that pick one. Pure text work, so it's tested without a device.
  */
 object Prompts {
+    /** The most lines of a prompt's own block the mark and the danger check read. */
+    private const val MARK_LINES = 40
+
     private val option = Regex("""^[\s│|]*([❯›>▶→●*]?)\s*(\d{1,2})[.)]\s+(.+?)\s*[│|]?\s*$""")
     private val riskyWords = listOf(
         "don't ask", "dont ask", "do not ask", "always", "for this session", "all edits", "push", "force",
@@ -90,16 +93,41 @@ object Prompts {
         val block = block(lines)
         val choices = choices(block)
         val above = if (block.isEmpty()) lines else lines.subList(0, block.first().first)
-        val text = above.map(::clean).filter { it.isNotBlank() }.takeLast(if (block.isEmpty()) 8 else 6)
-        val all = text + choices.map { "${if (it.selected) '>' else ' '}${it.number}.${it.label}" }
-        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(all.joinToString("\n").toByteArray())
-        val joined = text.joinToString("\n")
+        val cleaned = above.map(::clean)
+        val shown = cleaned.indices.filter { cleaned[it].isNotBlank() }
+        val tail = shown.takeLast(if (block.isEmpty()) 8 else 6)
+        val text = tail.map { cleaned[it] }
+        // The mark and the danger check read the last lines shown, extended upward to the prompt's own block
+        // (up to the rule or box edge above its options): two long commands that end in the same lines, or
+        // that a rule separates from the question, must still differ, in mark and in danger.
+        val rule = if (block.isEmpty()) -1 else above.indexOfLast(::isRule)
+        // A box's top edge is a firm start (what is outside the box may change without the question changing);
+        // a plain rule only extends the cover upward when it is further up than the last lines.
+        val boxTop = rule >= 0 && above[rule].any { it in "╭┌╔┏" }
+        val first = tail.firstOrNull() ?: 0
+        val start = when {
+            rule < 0 -> first
+            boxTop -> rule + 1
+            else -> minOf(first, rule + 1)
+        }
+        val covered = shown.filter { it >= start }.map { cleaned[it] }.takeLast(MARK_LINES)
+        val all = covered + choices.map { "${if (it.selected) '>' else '.'}${it.number}.${it.label}" }
+        // No whitespace in the hash: the same text wrapped differently keeps its mark.
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(all.joinToString("").filter { !it.isWhitespace() }.toByteArray())
+        val joined = covered.joinToString("\n")
         return Question(
             text = text,
             choices = choices,
             mark = digest.take(8).joinToString("") { "%02x".format(it) },
             dangerous = dangerous.any { it.containsMatchIn(joined) },
         )
+    }
+
+    /** A line of box-drawing characters only (a rule or box edge); `---` or `====` in content is not one. */
+    private fun isRule(line: String): Boolean {
+        val t = line.trim()
+        return t.length >= 3 && t.all { it in '\u2500'..'\u257F' }
     }
 
     /**
@@ -132,6 +160,29 @@ object Prompts {
         val moves = target.index - at
         val arrow = if (moves > 0) "down" else "up"
         return List(kotlin.math.abs(moves)) { arrow } + "enter"
+    }
+
+    /** What tapping one of the answer buttons does. */
+    sealed interface Pick {
+        /** Send these keys. */
+        data class Send(val keys: List<String>) : Pick
+        /** The screen no longer shows the question the button belonged to. */
+        object Changed : Pick
+        /** Risky option or dangerous command: only a press-and-hold takes it. */
+        object NeedsHold : Pick
+    }
+
+    /**
+     * The answer button [label], drawn for the question with [mark], read against
+     * the [screen] as it is now: nothing is sent unless it is still that question.
+     * Risky options and any option of a dangerous question need [held].
+     */
+    fun pick(screen: String, mark: String, label: String, held: Boolean): Pick {
+        val q = question(screen)
+        if (q.mark != mark) return Pick.Changed
+        val target = q.choices.firstOrNull { it.label == label } ?: return Pick.Changed
+        if ((target.risky || q.dangerous) && !held) return Pick.NeedsHold
+        return Pick.Send(keys(q.choices, target))
     }
 
     /** The last [n] lines with text, for a preview. */

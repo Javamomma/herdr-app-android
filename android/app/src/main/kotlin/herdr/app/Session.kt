@@ -44,6 +44,7 @@ import herdr.core.remove
 import herdr.core.setWeights
 import herdr.core.split
 import herdr.core.str
+import herdr.core.tabLabel
 import herdr.core.terminal
 import herdr.core.terminalPane
 import kotlinx.coroutines.CoroutineScope
@@ -574,20 +575,26 @@ class Session(private val context: Context) {
     }
 
     /**
-     * Answers an agent's question with one of its own options. Reads the
-     * screen again first: if the question changed, nothing is sent.
+     * Answers an agent's question with one of its own options, for the
+     * question the person was shown ([mark]). Reads the screen again first:
+     * if it shows another question, nothing is sent. Risky options and
+     * dangerous questions need [held] (a press-and-hold).
      */
-    fun choose(address: String, label: String) = attempt("Cannot answer") {
-        val now = readScreen(address) ?: return@attempt
-        val choices = Prompts.choices(now)
-        val target = choices.firstOrNull { it.label == label }
-        if (target == null) {
-            notice = "The question changed. Look at it again."
+    fun choose(address: String, label: String, mark: String, held: Boolean) = attempt("Cannot answer") {
+        if (agents().firstOrNull { it.address == address }?.state != "blocked") {
+            notice = "It isn't waiting any more."
             return@attempt
         }
-        io { it.call("terminal.keys", obj("terminal" to address, "keys" to Prompts.keys(choices, target))) }
-        delay(500)
-        readScreen(address)
+        val now = readScreen(address) ?: return@attempt
+        when (val pick = Prompts.pick(now, mark, label, held)) {
+            is Prompts.Pick.Send -> {
+                io { it.call("terminal.keys", obj("terminal" to address, "keys" to pick.keys)) }
+                delay(500)
+                readScreen(address)
+            }
+            Prompts.Pick.Changed -> notice = "The question changed. Look at it again."
+            Prompts.Pick.NeedsHold -> notice = "Press and hold to choose \"$label\""
+        }
     }
 
     private fun loadPhrases(): List<String> =
@@ -808,7 +815,12 @@ class Session(private val context: Context) {
         return folderName(cwd, if (s.machine == null) home else null).ifEmpty { "space" }
     }
 
-    fun tabName(s: Space, t: Tab): String = t.name.ifBlank { (s.tabs.indexOf(t) + 1).toString() }
+    /** A tab's name, else the status title of the first agent in it (pane order), else its number. */
+    fun tabName(s: Space, t: Tab): String {
+        if (t.name.isNotBlank()) return t.name
+        val titles = t.root.panes().mapNotNull { it.terminal }.map { terminals[it]["status"]["title"].str }
+        return tabLabel(t.name, titles, s.tabs.indexOf(t) + 1)
+    }
 
     fun machineLabel(machine: String?): String = machine ?: if (demo) "mac-mini (demo)" else profile.host.substringBefore('.').ifEmpty { "Mac" }
 
@@ -1067,10 +1079,12 @@ class Session(private val context: Context) {
     /** Unsent composer drafts, per terminal. */
     val drafts = mutableStateMapOf<String, String>()
 
-    /** Text copied from a terminal, for the clipboard. */
-    var copied by mutableStateOf<String?>(null)
-
     fun saveFont(px: Int) = viewPrefs.edit().putInt("font", px).apply()
+
+    /** The left panel hidden on the wide layout: this phone's own choice, never written to the shared layout. */
+    var sidebarHidden by mutableStateOf(viewPrefs.getBoolean("sidebarHidden", false))
+        private set
+    fun updateSidebarHidden(hidden: Boolean) { sidebarHidden = hidden; viewPrefs.edit().putBoolean("sidebarHidden", hidden).apply() }
 
     // ---- files and git, through the core ------------------------------------
 

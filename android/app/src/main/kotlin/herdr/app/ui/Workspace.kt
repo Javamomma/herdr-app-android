@@ -2,6 +2,7 @@ package herdr.app.ui
 
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,6 +34,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
@@ -71,7 +74,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -87,6 +93,11 @@ import herdr.app.Session
 import herdr.app.Theme
 import herdr.app.term.TerminalPool
 import herdr.core.Axis
+import herdr.core.LeftPanel
+import herdr.core.PanelToggle
+import herdr.core.SendOutcome
+import herdr.core.draftAfter
+import herdr.term.Clip
 import herdr.core.Space
 import herdr.core.Tab
 import herdr.core.activeChild
@@ -189,6 +200,11 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         LaunchedEffect(session.peek, session.activeSpace) { if (session.peek != null) agentsHome = false }
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
+        val drawerOpen = drawer.currentValue == DrawerValue.Open
+        // Back closes the panel first when it is on screen: wide hides it (saved, like the button), folded closes the drawer.
+        BackHandler(enabled = LeftPanel.backCloses(wide, session.sidebarHidden, drawerOpen)) {
+            if (wide) session.updateSidebarHidden(true) else scope.launch { drawer.close() }
+        }
         val sidebar: @Composable () -> Unit = {
             Sidebar(
                 session,
@@ -202,7 +218,16 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         val main: @Composable () -> Unit = {
             Column(Modifier.fillMaxSize().imePadding()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (!wide) IconButton(onClick = { scope.launch { drawer.open() } }) { Icon(Icons.Default.Menu, "Spaces", tint = Theme.text) }
+                    IconButton(onClick = {
+                        when (LeftPanel.toggle(wide, drawerOpen)) {
+                            PanelToggle.FlipSaved -> session.updateSidebarHidden(!session.sidebarHidden)
+                            PanelToggle.OpenDrawer -> scope.launch { drawer.open() }
+                            PanelToggle.CloseDrawer -> scope.launch { drawer.close() }
+                        }
+                    }) {
+                        val icon = if (LeftPanel.open(wide, session.sidebarHidden, drawerOpen)) Icons.AutoMirrored.Filled.MenuOpen else Icons.Default.Menu
+                        Icon(icon, "Show or hide the left panel", tint = Theme.text)
+                    }
                     if (!wide) IconButton(onClick = { agentsHome = !agentsHome }) {
                         Icon(Icons.Default.SmartToy, "Agents", tint = if (agentsHome) Theme.accent else Theme.dim)
                     }
@@ -234,12 +259,15 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         }
         if (wide) {
             Row(Modifier.fillMaxSize()) {
-                Box(Modifier.width(if (wider) 280.dp else 240.dp).fillMaxHeight().background(Theme.panel)) { sidebar() }
-                Box(Modifier.width(1.dp).fillMaxHeight().background(Theme.border))
+                if (LeftPanel.besideShown(wide, session.sidebarHidden)) {
+                    Box(Modifier.width(if (wider) 280.dp else 240.dp).fillMaxHeight().background(Theme.panel)) { sidebar() }
+                    Box(Modifier.width(1.dp).fillMaxHeight().background(Theme.border))
+                }
                 Box(Modifier.weight(1f)) { main() }
             }
         } else {
-            ModalNavigationDrawer(drawerState = drawer, drawerContent = {
+            // Swipe only while open (to swipe it shut): sideways drags that start on the terminal are its own (selection, scrolling).
+            ModalNavigationDrawer(drawerState = drawer, gesturesEnabled = LeftPanel.drawerGestures(drawerOpen), drawerContent = {
                 ModalDrawerSheet(drawerContainerColor = Theme.panel, modifier = Modifier.width(300.dp)) { sidebar() }
             }) { main() }
         }
@@ -397,7 +425,8 @@ private fun AgentRow(session: Session, a: Agent, onPicked: () -> Unit) {
 @Composable
 fun Answers(session: Session, a: Agent, compact: Boolean) {
     val screen = session.screens[a.address] ?: return
-    val choices = remember(screen) { herdr.core.Prompts.choices(screen) }
+    val q = remember(screen) { herdr.core.Prompts.question(screen) }
+    val choices = q.choices
     if (choices.isEmpty()) return
     androidx.compose.foundation.layout.FlowRow(
         Modifier.padding(top = 6.dp),
@@ -405,14 +434,14 @@ fun Answers(session: Session, a: Agent, compact: Boolean) {
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         for (c in choices) {
-            val color = if (c.risky) Theme.stateColor("blocked") else Theme.accent
+            val color = if (c.risky || q.dangerous) Theme.stateColor("blocked") else Theme.accent
             Text(
-                (c.number?.let { "$it. " } ?: "") + c.label + if (c.risky) "  (hold)" else "",
+                (c.number?.let { "$it. " } ?: "") + c.label + if (c.risky || q.dangerous) "  (hold)" else "",
                 color = color, fontSize = if (compact) 12.sp else 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.border(1.dp, color.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
                     .combinedClickable(
-                        onClick = { if (c.risky) session.notice = "Press and hold to choose \"${c.label}\"" else session.choose(a.address, c.label) },
-                        onLongClick = { session.choose(a.address, c.label) },
+                        onClick = { if (c.risky || q.dangerous) session.notice = "Press and hold to choose \"${c.label}\"" else session.choose(a.address, c.label, q.mark, held = false) },
+                        onLongClick = { session.choose(a.address, c.label, q.mark, held = true) },
                     )
                     .padding(horizontal = 10.dp, vertical = if (compact) 5.dp else 8.dp),
             )
@@ -451,7 +480,7 @@ private fun TabBar(session: Session, space: Space?, wide: Boolean, onRename: (Ta
                         Dot(state, 7.dp)
                         Spacer(Modifier.width(6.dp))
                     }
-                    Text(session.tabName(space, t), color = if (selected) Theme.text else Theme.dim, fontSize = 13.sp, maxLines = 1)
+                    Text(session.tabName(space, t), color = if (selected) Theme.text else Theme.dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text("Rename tab") }, onClick = { menu = false; onRename(t) })
@@ -600,6 +629,7 @@ private fun PaneView(session: Session, pool: TerminalPool, space: Space, tab: Ta
     val focused = session.focused[tab.id] == id
     val addr = pane.terminal
     var menu by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
     val state = addr?.let { a -> session.agents().firstOrNull { it.address == a }?.state }
     Column(
         Modifier.fillMaxSize().padding(2.dp)
@@ -630,7 +660,7 @@ private fun PaneView(session: Session, pool: TerminalPool, space: Space, tab: Ta
                     DropdownMenuItem(text = { Text("Close pane") }, onClick = { menu = false; session.requestClosePane(id) })
                     if (addr != null) DropdownMenuItem(text = { Text("Copy selection") }, onClick = {
                         menu = false
-                        pool.get(addr)?.copySelection { session.copied = it }
+                        copyPicked(clipboard, session, pool.get(addr)?.selection)
                     })
                     DropdownMenuItem(text = { Text("New tab here") }, onClick = { menu = false; session.newTab(space.id, null) })
                 }
@@ -638,7 +668,7 @@ private fun PaneView(session: Session, pool: TerminalPool, space: Space, tab: Ta
         }
         Box(Modifier.fillMaxSize()) {
             if (addr != null) {
-                TerminalBox(pool, addr) { session.focusPane(tab.id, id) }
+                TerminalBox(session, pool, addr) { session.focusPane(tab.id, id) }
             } else {
                 Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Mod pane: ${pane.modName}", color = Theme.text)
@@ -656,7 +686,7 @@ private fun PaneButton(icon: ImageVector, label: String, onClick: () -> Unit) {
 
 /** The terminal's native view, moved into whichever box shows it. */
 @Composable
-fun TerminalBox(pool: TerminalPool, address: String, onTouch: () -> Unit) {
+fun TerminalBox(session: Session, pool: TerminalPool, address: String, onTouch: () -> Unit) {
     val ctl = remember(address) { pool.acquire(address) }
     DisposableEffect(address) { onDispose { pool.release(address) } }
     Box(Modifier.fillMaxSize()) {
@@ -671,20 +701,42 @@ fun TerminalBox(pool: TerminalPool, address: String, onTouch: () -> Unit) {
             },
             modifier = Modifier.fillMaxSize(),
         )
-        if (ctl.selection.isNotEmpty()) {
+        val picked = ctl.selection
+        if (picked != null) {
             val clipboard = LocalClipboardManager.current
+            // Copy keeps the text; Select all takes everything; Paste does what the key row's Paste does.
             Row(
-                Modifier.align(Alignment.TopEnd).padding(8.dp).background(Theme.raised, RoundedCornerShape(8.dp)).border(1.dp, Theme.border, RoundedCornerShape(8.dp)),
+                Modifier.align(Alignment.TopEnd).padding(8.dp).background(Theme.raised, RoundedCornerShape(8.dp)).border(1.dp, Theme.border, RoundedCornerShape(8.dp))
+                    .horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 androidx.compose.material3.TextButton(onClick = {
-                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(ctl.selection))
+                    copyPicked(clipboard, session, picked)
                     ctl.clearSelection()
                 }) { Text("Copy") }
+                androidx.compose.material3.TextButton(onClick = { ctl.selectAll() }) { Text("Select all") }
+                androidx.compose.material3.TextButton(onClick = {
+                    clipboardText(clipboard, session)?.let { ctl.paste(it); ctl.clearSelection() }
+                }) { Text("Paste") }
                 androidx.compose.material3.TextButton(onClick = { ctl.clearSelection() }) { Text("Clear", color = Theme.dim) }
             }
         }
     }
+}
+
+/** The clipboard's text for a paste into a terminal or the message box; says "Nothing to paste" and gives null when there is none. */
+private fun clipboardText(clipboard: androidx.compose.ui.platform.ClipboardManager, session: Session): String? {
+    val text = clipboard.getText()?.text
+    if (text.isNullOrEmpty()) { session.notice = "Nothing to paste"; return null }
+    return text
+}
+
+/** Puts a terminal selection on the clipboard (an empty one leaves it alone) and says what happened. */
+private fun copyPicked(clipboard: androidx.compose.ui.platform.ClipboardManager, session: Session, picked: herdr.term.Picked?) {
+    val p = picked ?: herdr.term.Picked("")
+    // An empty selection must not overwrite what is already on the clipboard.
+    if (Clip.shouldWrite(p.text)) clipboard.setText(androidx.compose.ui.text.AnnotatedString(p.text))
+    session.notice = Clip.copyNotice(p.text, p.cut)
 }
 
 /** A worker without a pane, shown over the tab. */
@@ -700,7 +752,7 @@ private fun Peek(session: Session, pool: TerminalPool, address: String) {
                 androidx.compose.material3.TextButton(onClick = { session.keepAsTab(address) }) { Text("Keep as tab") }
                 IconButton(onClick = { session.peek = null }) { Icon(Icons.Default.Close, "Close", tint = Theme.dim) }
             }
-            Box(Modifier.weight(1f)) { TerminalBox(pool, address) {} }
+            Box(Modifier.weight(1f)) { TerminalBox(session, pool, address) {} }
             KeyBar(session, pool)
         }
     }
@@ -728,10 +780,32 @@ fun KeyBar(session: Session, pool: TerminalPool) {
                 .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 11.dp),
         )
     }
-    if (composing && address != null) Composer(session, address) { target() }
+    // The message box's text and cursor live here so Paste can insert at the cursor.
+    val draftText = address?.let { session.drafts[it] } ?: ""
+    var typedField by remember(address) { mutableStateOf(TextFieldValue(draftText, TextRange(draftText.length))) }
+    val field = if (typedField.text == draftText) typedField else TextFieldValue(draftText, TextRange(draftText.length))
+    var boxFocused by remember(address) { mutableStateOf(false) }
+    fun pasteIntoDraft(text: String) {
+        val a = address ?: return
+        val (t, pos) = Clip.insertAt(field.text, field.selection.start, field.selection.end, text)
+        typedField = TextFieldValue(t, TextRange(pos))
+        session.drafts[a] = t
+    }
+    fun pasteFromClipboard(toDraft: Boolean) {
+        val text = clipboardText(clipboard, session) ?: return
+        // With the message box in use the text goes into the draft and nothing reaches the terminal.
+        if (toDraft) pasteIntoDraft(text) else target()?.paste(text)
+    }
+    if (composing && address != null) {
+        Composer(
+            session, address, field, onField = { typedField = it; session.drafts[address] = it.text },
+            onFocus = { boxFocused = it }, onPaste = { pasteFromClipboard(true) },
+        ) { target() }
+    }
     Row(Modifier.fillMaxWidth().background(Theme.panel).horizontalScroll(rememberScrollState()).padding(4.dp)) {
         K("⌨", imeVisible) { target()?.toggleKeyboard(imeVisible) }
         K("esc") { target()?.key("esc") }
+        K("paste") { pasteFromClipboard(composing && boxFocused) }
         K("^C") { target()?.type("\u0003") }
         K("tab") { target()?.key("tab") }
         K("ctrl", session.ctrl) { session.ctrl = !session.ctrl }
@@ -748,24 +822,21 @@ fun KeyBar(session: Session, pool: TerminalPool) {
         K("pgup") { target()?.key("pgup") }
         K("pgdn") { target()?.key("pgdn") }
         K("⚡") { session.requested = "snippets" }
-        K("paste") { clipboard.getText()?.text?.let { target()?.paste(it) } }
         K("type", composing) { if (address != null) session.composer[address] = !composing }
         K("A−") { pool.fontSize = (pool.fontSize - 1).coerceAtLeast(7); session.saveFont(pool.fontSize) }
         K("A+") { pool.fontSize = (pool.fontSize + 1).coerceAtMost(32); session.saveFont(pool.fontSize) }
-    }
-    LaunchedEffect(session.copied) {
-        session.copied?.let {
-            clipboard.setText(androidx.compose.ui.text.AnnotatedString(it))
-            session.notice = if (it.isEmpty()) "Nothing selected: long-press text in the terminal first." else "Copied."
-            session.copied = null
-        }
     }
 }
 
 /** A draft for an agent, kept per terminal until sent, with quick phrases and slash commands. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Composer(session: Session, address: String, target: () -> herdr.app.term.TerminalController?) {
+private fun Composer(
+    session: Session, address: String, field: TextFieldValue, onField: (TextFieldValue) -> Unit,
+    onFocus: (Boolean) -> Unit, onPaste: () -> Unit, target: () -> herdr.app.term.TerminalController?,
+) {
+    DisposableEffect(address) { onDispose { onFocus(false) } }
+    var sending by remember(address) { mutableStateOf(false) }
     val draft = session.drafts[address] ?: ""
     val app = session.agents().firstOrNull { it.address == address }?.app ?: ""
     val slash = if (app.contains("codex", ignoreCase = true)) listOf("/new", "/model", "/approvals", "/diff", "/status", "/compact")
@@ -792,16 +863,28 @@ private fun Composer(session: Session, address: String, target: () -> herdr.app.
     }
     Row(Modifier.fillMaxWidth().background(Theme.panel).padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.Bottom) {
         androidx.compose.material3.OutlinedTextField(
-            value = draft, onValueChange = { session.drafts[address] = it },
+            value = field, onValueChange = onField,
             placeholder = { Text("Message the agent…", fontSize = 14.sp) },
-            maxLines = 6, modifier = Modifier.weight(1f),
+            maxLines = 6, modifier = Modifier.weight(1f).onFocusChanged { onFocus(it.isFocused) },
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences),
         )
-        Spacer(Modifier.width(6.dp))
+        androidx.compose.material3.TextButton(onClick = onPaste, modifier = Modifier.padding(bottom = 4.dp)) { Text("Paste") }
         androidx.compose.material3.Button(
+            enabled = !sending,
             onClick = {
-                target()?.submit(draft)
-                session.drafts.remove(address)
+                val sent = draft
+                val t = target()
+                if (t == null) {
+                    session.notice = SendOutcome.Rejected.notice
+                } else {
+                    sending = true
+                    t.submit(sent) { outcome ->
+                        sending = false
+                        // The draft stays unless the message was delivered; nothing is resent.
+                        if (draftAfter(session.drafts[address] ?: "", sent, outcome).isEmpty()) session.drafts.remove(address)
+                        outcome.notice?.let { session.notice = it }
+                    }
+                }
             },
             modifier = Modifier.padding(bottom = 4.dp),
         ) { Text("Send") }

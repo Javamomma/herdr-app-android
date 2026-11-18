@@ -36,12 +36,16 @@ at the apps made for its socket API, such as
   the phone unlocked and never answer a question you didn't see.
 - **Fold-aware layout**: sidebar beside your splits when unfolded; folded, the
   cover screen opens on your agents and shows one pane at a time. Folding
-  never restarts anything.
+  never restarts anything. The ☰ button (or Back) hides the sidebar at any
+  width; folded it opens as a drawer from that button.
 - **A native terminal**: truecolor, emoji and wide characters, mouse
   reporting, smooth scrollback with fling, long-press to copy, pinch to zoom,
   a key bar (Esc, ^C, Ctrl/Alt, arrows, …) and hardware keyboards.
 - **Type box**: write to an agent with your keyboard's autocorrect, swipe and
-  voice typing, sent in one go.
+  voice typing, sent in one go. **Paste** (beside Esc, and on the box) goes
+  where you are typing. Your draft stays until the Mac confirms the message.
+- **Answer buttons** with the agent's own options, on its card and pane. They
+  only answer the question you were shown; risky ones need press-and-hold.
 - **Saved commands** (⚡): one tap types `git status` or starts Claude Code in
   a new tab.
 - **Home-screen widget**: blocked / done / working at a glance.

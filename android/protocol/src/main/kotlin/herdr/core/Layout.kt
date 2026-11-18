@@ -20,6 +20,13 @@ enum class Axis(val type: String) { Row("row"), Column("column") }
 
 data class Tab(val id: String, val name: String, val root: JsonObject)
 
+/**
+ * What a tab is called: its name, else the status title of the first of its
+ * agents in pane order ([paneTitles], null for a pane without one), else its [number].
+ */
+fun tabLabel(name: String, paneTitles: List<String?>, number: Int): String =
+    name.ifBlank { paneTitles.firstOrNull { !it.isNullOrBlank() }?.trim() ?: number.toString() }
+
 data class Space(
     val id: String,
     val name: String,

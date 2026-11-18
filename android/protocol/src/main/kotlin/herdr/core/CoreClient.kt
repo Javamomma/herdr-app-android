@@ -32,7 +32,12 @@ class RpcException(val error: JsonElement, method: String) :
     val kind: String? get() = error["data"]["kind"].str
 }
 
-class CoreLostException(message: String) : Exception(message)
+/**
+ * The connection is gone or gave no answer. [afterWrite] is true when the
+ * request had already been written, so the core may have acted on it; false
+ * when it failed before anything was written.
+ */
+class CoreLostException(message: String, val afterWrite: Boolean = false) : Exception(message)
 
 /** Receives one channel's frames, on the connection's reader thread. */
 interface StreamListener {
@@ -127,9 +132,9 @@ class CoreClient private constructor(
         Thread({
             try {
                 while (true) {
-                    val frame = queue.take()
-                    if (frame.isEmpty()) break
-                    output.write(frame)
+                    val bytes = queue.take()
+                    if (bytes.isEmpty()) break
+                    output.write(bytes)
                     if (queue.isEmpty()) output.flush()
                 }
             } catch (_: Exception) {
@@ -189,8 +194,9 @@ class CoreClient private constructor(
             automaticInput.clear()
             l to lostListeners.toList()
         }
+        queue.clear()
         queue.offer(ByteArray(0))
-        for (r in replies.values) r.completeExceptionally(CoreLostException("lost the core"))
+        for (r in replies.values) r.completeExceptionally(CoreLostException("lost the core", afterWrite = true))
         replies.clear()
         for (l in listeners) runCatching { l.onLost() }
         for (l in lost) runCatching { l() }
@@ -227,11 +233,11 @@ class CoreClient private constructor(
             return future.get(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (e: TimeoutException) {
             replies.remove(id)
-            throw CoreLostException("$method: no reply from core")
+            throw CoreLostException("$method: no reply from core", afterWrite = true)
         } catch (e: ExecutionException) {
             when (val cause = e.cause) {
                 is RpcException -> throw RpcException(cause.error, method)
-                is CoreLostException -> throw CoreLostException("$method: ${cause.message}")
+                is CoreLostException -> throw CoreLostException("$method: ${cause.message}", cause.afterWrite)
                 else -> throw e
             }
         }

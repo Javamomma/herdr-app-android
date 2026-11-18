@@ -1,11 +1,22 @@
 # Screenshots of the Android client's demo on an emulator sized like a Galaxy
 # Z Fold 7, then the safety checks (android/scripts/safety-check.sh) on the
-# same emulator. Run by hand from the Actions tab; the PNGs land in the run's
+# same emulator. Runs on pull requests that touch android/ (the safety check
+# fails the run) and by hand from the Actions tab; the PNGs land in the run's
 # artifacts.
 name: android-screenshots
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-screenshots.yml"
+      - "!android/**/*.md"
+      - "!android/docs/**"
+
+concurrency:
+  group: android-screenshots-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -49,4 +60,4 @@ jobs:
         with:
           name: herdr-android-screenshots
           path: android/screenshots/
-          if-no-files-found: error
+          if-no-files-found: warn

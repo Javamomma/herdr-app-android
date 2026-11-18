@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### New
+- The left panel can be hidden at every width with one tap, and Back hides it. Folded, it opens with the button (swiping from the edge is off, so sideways drags stay with the terminal).
+- Paste sits beside Esc and goes to the box you are typing in; it says "Nothing to paste" when the clipboard has no text.
+- Unnamed tabs show their agent's title, else their number.
+- Terminal selection bar: Select all (everything, scrollback included; blank lines at the bottom are left out) and Paste, beside Copy and Clear. After a long-press, drag either end of the selection to adjust it.
+- A very large copy is cut to its newest 200,000 characters, and a notice says so, instead of failing on Android's clipboard limit.
+
+### Fixed
+- Multi-line text from the keyboard is sent as one paste instead of line by line.
+- Long-pressing older text in the terminal no longer closes the app.
+- Copy with nothing selected leaves the clipboard alone.
+- Send keeps your draft unless the Mac confirmed it, and says what happened: not sent, or maybe sent.
+- Answer buttons only answer the question that was shown.
+
 ## [0.2.0] - 2026-11-09
 
 ### New

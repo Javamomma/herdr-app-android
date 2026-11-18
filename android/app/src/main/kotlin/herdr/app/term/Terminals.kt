@@ -10,6 +10,8 @@ import androidx.compose.runtime.setValue
 import herdr.app.Session
 import herdr.app.Theme
 import herdr.core.CoreClient
+import herdr.core.SendOutcome
+import herdr.core.sendMessage
 import herdr.core.StreamListener
 import herdr.core.get
 import herdr.core.str
@@ -17,6 +19,7 @@ import herdr.term.Emulator
 import herdr.term.Key
 import herdr.term.Keys
 import herdr.term.Mods
+import herdr.term.Picked
 import kotlinx.serialization.json.JsonElement
 import kotlin.concurrent.thread
 
@@ -44,8 +47,8 @@ class TerminalController(context: Context, val address: String, private val sess
         private set
     var title by mutableStateOf("")
         private set
-    /** What the person selected (empty: nothing). */
-    var selection by mutableStateOf("")
+    /** What the person selected (null: nothing is selected; the text may still be empty, a blank cell). */
+    var selection by mutableStateOf<Picked?>(null)
         private set
 
     init {
@@ -98,8 +101,8 @@ class TerminalController(context: Context, val address: String, private val sess
         }
     }
 
-    fun onSelection(text: String) {
-        selection = text
+    fun onSelection(picked: Picked?) {
+        selection = picked
     }
 
     /** Text typed on a keyboard; the key bar's sticky Ctrl/Alt apply once. */
@@ -107,6 +110,11 @@ class TerminalController(context: Context, val address: String, private val sess
         val m = latched(mods)
         val t = text.replace('\n', '\r')
         send(if (m.ctrl || m.alt) Keys.text(t, m) else t)
+    }
+
+    /** Text the keyboard committed: several lines go in as one real paste, one line is typed. */
+    fun committed(text: String) {
+        if (Keys.commitsAsPaste(text)) paste(text) else typed(text)
     }
 
     fun sendKey(key: Key, mods: Mods) {
@@ -149,11 +157,19 @@ class TerminalController(context: Context, val address: String, private val sess
         send(Keys.paste(text, bracketed))
     }
 
-    /** A message from the Type composer: pasted as one piece, then Enter. */
-    fun submit(text: String) {
-        if (text.isNotEmpty()) paste(text)
-        // Let the program take the paste before the Enter that sends it.
-        ui.postDelayed({ send("\r") }, 60)
+    /**
+     * A message from the Type composer: the core pastes it as one piece, then presses Enter.
+     * [done] hears (on the UI thread) what the core made of it; never resent here.
+     */
+    fun submit(text: String, done: (SendOutcome) -> Unit) {
+        val core = attachedTo
+        thread(name = "hc-submit", isDaemon = true) {
+            val outcome = sendMessage(core, address, text)
+            ui.post {
+                if (outcome == SendOutcome.Accepted) view.scrollToBottom()
+                done(outcome)
+            }
+        }
     }
 
     fun setFont(px: Int) {
@@ -165,7 +181,7 @@ class TerminalController(context: Context, val address: String, private val sess
 
     fun toggleKeyboard(visible: Boolean) = if (visible) view.hideKeyboard() else view.showKeyboard()
 
-    fun copySelection(done: (String) -> Unit) = done(view.selectionText())
+    fun selectAll() = view.selectAll()
 
     fun clearSelection() = view.clearSelection()
 

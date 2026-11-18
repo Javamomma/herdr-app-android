@@ -195,4 +195,19 @@ class EmulatorTest {
         assertEquals("\u001b[<64;3;2M", Keys.mouse(64, 2, 1, true, true))
         assertEquals("\u001b[M`#\"", Keys.mouse(64, 2, 1, true, false))
     }
+
+    @Test
+    fun long_press_on_short_history_lines_stays_in_bounds() {
+        val e = emu(20, 2, "ab cd\r\nxy\r\nlast\r\nmore")
+        assertTrue(e.historySize >= 2)
+        assertTrue(e.lineAt(0)!!.capacity < 20, "scrollback lines are trimmed")
+        assertEquals(3..4, e.wordAt(0, 4), "last word of a short history line")
+        assertEquals(0..1, e.wordAt(0, 0))
+        assertEquals(15..15, e.wordAt(0, 15), "blank area right of the line")
+        assertEquals(19..19, e.wordAt(0, 19), "last column")
+        assertEquals(" ", e.lineAt(0)!!.text(19))
+        assertEquals("cd", e.text(0, 3, 0, 19))
+        assertEquals("cd\nxy", e.text(0, 3, 1, 19))
+        assertEquals("ab cd\nxy\nlast", e.text(0, 0, 2, 19))
+    }
 }
