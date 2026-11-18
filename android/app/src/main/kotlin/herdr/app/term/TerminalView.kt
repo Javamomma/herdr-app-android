@@ -17,16 +17,21 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.widget.OverScroller
 import herdr.term.Attr
+import herdr.term.Cell
 import herdr.term.Color
 import herdr.term.CursorShape
 import herdr.term.Emulator
 import herdr.term.Key
 import herdr.term.Mods
 import herdr.term.Mouse
+import herdr.term.Picked
+import herdr.term.Sel
+import herdr.term.Select
 import herdr.term.Style
 import herdr.term.WIDE_TAIL
 import kotlin.math.abs
 import kotlin.math.floor
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 /**
@@ -55,10 +60,15 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
     private var wheelAccum = 0f
     private var focused = false
 
-    // Selection, as (row index, column) pairs in [Emulator.lineAt] coordinates.
+    // Selection, in [Emulator.lineAt] coordinates. [selecting]: the long-press drag is going on.
+    // [adjusting]: a finger holds one end of a finished selection (true: the start).
     private var selecting = false
-    private var selStart: Pair<Int, Int>? = null
-    private var selEnd: Pair<Int, Int>? = null
+    private var picked: Sel? = null
+    private var adjusting: Boolean? = null
+    private var adjustMoved = false
+    private var downX = 0f
+    private var downY = 0f
+    private val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
 
     init {
         isFocusable = true
@@ -139,11 +149,7 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
     }
 
     private fun selected(idx: Int, col: Int): Boolean {
-        val (a, b) = orderedSelection() ?: return false
-        if (idx < a.first || idx > b.first) return false
-        if (idx == a.first && col < a.second) return false
-        if (idx == b.first && col > b.second) return false
-        return true
+        return picked?.contains(idx, col) == true
     }
 
     private fun drawLine(canvas: Canvas, line: herdr.term.Line, idx: Int, y: Float, defFg: Int, defBg: Int) {
@@ -152,14 +158,14 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
         var c = 0
         while (c < cols) {
             val style = line.styles[c]
-            val sel = selStart != null && selected(idx, c)
+            val sel = picked != null && selected(idx, c)
             // A run: plain ASCII of one style and selection state, drawn as one
             // string; anything else (wide, clusters, symbols) is one cell on its own.
             fun plain(k: Int) = line.chars[k] in 0x20..0x7e && line.extra?.containsKey(k) != true
             val ascii = plain(c)
             var end = c + 1
             if (ascii) {
-                while (end < cols && plain(end) && line.styles[end] == style && (selStart == null || selected(idx, end) == sel)) end++
+                while (end < cols && plain(end) && line.styles[end] == style && (picked == null || selected(idx, end) == sel)) end++
             } else if (end < cols && line.chars[end] == WIDE_TAIL) {
                 end++
             }
@@ -235,12 +241,12 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
 
     // ---- touch -----------------------------------------------------------------
 
-    private fun cellAt(x: Float, y: Float): Pair<Int, Int> {
+    private fun cellAt(x: Float, y: Float): Cell {
         val history = emu.historySize
         val topF = history - scrollPx / cellH
         val idx = floor(topF + (y - pad) / cellH).toInt().coerceIn(0, history + emu.rows - 1)
         val col = floor((x - pad) / cellW).toInt().coerceIn(0, emu.cols - 1)
-        return idx to col
+        return Cell(idx, col)
     }
 
     /** A web address or a file path under the tap, on one row. */
@@ -269,7 +275,7 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
         }
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            if (selStart != null) {
+            if (picked != null) {
                 clearSelection()
                 return true
             }
@@ -297,8 +303,7 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
                 val word = emu.wordAt(idx, col)
                 val a = word.first
                 val b = word.last
-                selStart = idx to a
-                selEnd = idx to b
+                picked = Sel(Cell(idx, a), Cell(idx, b))
             }
             selecting = true
             invalidate()
@@ -377,36 +382,103 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         scale.onTouchEvent(event)
-        if (scale.isInProgress) return true
+        if (scale.isInProgress || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+            // A second finger is a pinch: let go of a selection end.
+            if (adjusting != null) finishAdjust()
+            if (scale.isInProgress) return true
+        }
         if (selecting && event.actionMasked == MotionEvent.ACTION_MOVE) {
-            synchronized(emu) { selEnd = cellAt(event.x, event.y) }
+            synchronized(emu) { picked = picked?.copy(end = cellAt(event.x, event.y)) }
             invalidate()
             return true
         }
         if (selecting && (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL)) {
             selecting = false
-            term.onSelection(selectionText())
+            term.onSelection(selectionPicked())
+            return true
+        }
+        // A finished selection: a drag that starts on one of its ends moves that end.
+        // Everything else (scroll, fling, tap, mouse reports) goes the usual way.
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && picked != null && !selecting) {
+            endNear(event.x, event.y)?.let {
+                adjusting = it
+                adjustMoved = false
+                downX = event.x
+                downY = event.y
+                return true
+            }
+        }
+        val grabbed = adjusting
+        if (grabbed != null) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> {
+                    if (!adjustMoved && hypot(event.x - downX, event.y - downY) > slop) adjustMoved = true
+                    if (adjustMoved) {
+                        synchronized(emu) {
+                            picked?.let {
+                                val (moved, stillStart) = it.move(grabbed, cellAt(event.x, event.y))
+                                picked = moved
+                                adjusting = stillStart
+                            }
+                        }
+                        invalidate()
+                    }
+                }
+                MotionEvent.ACTION_UP -> if (adjustMoved) finishAdjust() else { adjusting = null; clearSelection() }
+                MotionEvent.ACTION_CANCEL -> finishAdjust()
+            }
             return true
         }
         return gestures.onTouchEvent(event) || super.onTouchEvent(event)
     }
 
-    private fun orderedSelection(): Pair<Pair<Int, Int>, Pair<Int, Int>>? {
-        val a = selStart ?: return null
-        val b = selEnd ?: return null
-        return if (a.first < b.first || (a.first == b.first && a.second <= b.second)) a to b else b to a
+    private fun finishAdjust() {
+        adjusting = null
+        if (picked != null) term.onSelection(selectionPicked())
     }
 
-    fun selectionText(): String = synchronized(emu) {
-        val (a, b) = orderedSelection() ?: return ""
-        emu.text(a.first, a.second, b.first, b.second)
+    /** Which end of the finished selection is under (x, y), or close to it: true for the start. */
+    private fun endNear(x: Float, y: Float): Boolean? = synchronized(emu) {
+        val s = picked?.ordered() ?: return null
+        val topF = emu.historySize - scrollPx / cellH
+        fun dist(c: Cell, right: Boolean): Float =
+            hypot(x - (pad + (if (right) c.col + 1 else c.col) * cellW), y - (pad + (c.row - topF) * cellH + cellH / 2))
+        val ds = dist(s.start, false)
+        val de = dist(s.end, true)
+        val reach = maxOf(cellH * 1.5f, 28f * resources.displayMetrics.density)
+        when {
+            minOf(ds, de) > reach -> null
+            ds < de -> true
+            else -> false
+        }
+    }
+
+    /** The selected text, held to what the clipboard takes (see [herdr.term.Clip.MAX_CHARS]). */
+    fun selectionPicked(): Picked = synchronized(emu) {
+        val s = picked ?: return Picked("")
+        Select.text(emu, s)
+    }
+
+    fun selectionText(): String = selectionPicked().text
+
+    /** Selects everything: scrollback and screen (the screen only on the alternate one), minus blank lines at the bottom. */
+    fun selectAll() {
+        val p = synchronized(emu) {
+            val all = Select.all(emu) ?: return
+            picked = all
+            Select.text(emu, all)
+        }
+        selecting = false
+        adjusting = null
+        term.onSelection(p)
+        invalidate()
     }
 
     fun clearSelection() {
-        selStart = null
-        selEnd = null
+        picked = null
         selecting = false
-        term.onSelection("")
+        adjusting = null
+        term.onSelection(null)
         invalidate()
     }
 

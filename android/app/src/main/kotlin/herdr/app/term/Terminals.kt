@@ -19,6 +19,7 @@ import herdr.term.Emulator
 import herdr.term.Key
 import herdr.term.Keys
 import herdr.term.Mods
+import herdr.term.Picked
 import kotlinx.serialization.json.JsonElement
 import kotlin.concurrent.thread
 
@@ -46,8 +47,8 @@ class TerminalController(context: Context, val address: String, private val sess
         private set
     var title by mutableStateOf("")
         private set
-    /** What the person selected (empty: nothing). */
-    var selection by mutableStateOf("")
+    /** What the person selected (null: nothing is selected; the text may still be empty, a blank cell). */
+    var selection by mutableStateOf<Picked?>(null)
         private set
 
     init {
@@ -100,8 +101,8 @@ class TerminalController(context: Context, val address: String, private val sess
         }
     }
 
-    fun onSelection(text: String) {
-        selection = text
+    fun onSelection(picked: Picked?) {
+        selection = picked
     }
 
     /** Text typed on a keyboard; the key bar's sticky Ctrl/Alt apply once. */
@@ -180,7 +181,7 @@ class TerminalController(context: Context, val address: String, private val sess
 
     fun toggleKeyboard(visible: Boolean) = if (visible) view.hideKeyboard() else view.showKeyboard()
 
-    fun copySelection(done: (String) -> Unit) = done(view.selectionText())
+    fun selectAll() = view.selectAll()
 
     fun clearSelection() = view.clearSelection()
 

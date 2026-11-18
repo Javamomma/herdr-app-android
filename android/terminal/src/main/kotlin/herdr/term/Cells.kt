@@ -79,6 +79,12 @@ class Line(cols: Int) {
         return extra?.get(col) ?: String(Character.toChars(c))
     }
 
+    /** Nothing but spaces in the first [cols] cells. */
+    fun isBlank(cols: Int = chars.size): Boolean {
+        for (i in 0 until minOf(cols, chars.size)) if (chars[i] != ' '.code || extra?.containsKey(i) == true) return false
+        return true
+    }
+
     /** Cells after the last non-blank, default-styled one. */
     fun usedLength(): Int {
         var n = chars.size

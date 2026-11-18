@@ -629,6 +629,7 @@ private fun PaneView(session: Session, pool: TerminalPool, space: Space, tab: Ta
     val focused = session.focused[tab.id] == id
     val addr = pane.terminal
     var menu by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
     val state = addr?.let { a -> session.agents().firstOrNull { it.address == a }?.state }
     Column(
         Modifier.fillMaxSize().padding(2.dp)
@@ -659,7 +660,7 @@ private fun PaneView(session: Session, pool: TerminalPool, space: Space, tab: Ta
                     DropdownMenuItem(text = { Text("Close pane") }, onClick = { menu = false; session.requestClosePane(id) })
                     if (addr != null) DropdownMenuItem(text = { Text("Copy selection") }, onClick = {
                         menu = false
-                        pool.get(addr)?.copySelection { session.copied = it }
+                        copyPicked(clipboard, session, pool.get(addr)?.selection)
                     })
                     DropdownMenuItem(text = { Text("New tab here") }, onClick = { menu = false; session.newTab(space.id, null) })
                 }
@@ -667,7 +668,7 @@ private fun PaneView(session: Session, pool: TerminalPool, space: Space, tab: Ta
         }
         Box(Modifier.fillMaxSize()) {
             if (addr != null) {
-                TerminalBox(pool, addr) { session.focusPane(tab.id, id) }
+                TerminalBox(session, pool, addr) { session.focusPane(tab.id, id) }
             } else {
                 Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Mod pane: ${pane.modName}", color = Theme.text)
@@ -685,7 +686,7 @@ private fun PaneButton(icon: ImageVector, label: String, onClick: () -> Unit) {
 
 /** The terminal's native view, moved into whichever box shows it. */
 @Composable
-fun TerminalBox(pool: TerminalPool, address: String, onTouch: () -> Unit) {
+fun TerminalBox(session: Session, pool: TerminalPool, address: String, onTouch: () -> Unit) {
     val ctl = remember(address) { pool.acquire(address) }
     DisposableEffect(address) { onDispose { pool.release(address) } }
     Box(Modifier.fillMaxSize()) {
@@ -700,20 +701,42 @@ fun TerminalBox(pool: TerminalPool, address: String, onTouch: () -> Unit) {
             },
             modifier = Modifier.fillMaxSize(),
         )
-        if (ctl.selection.isNotEmpty()) {
+        val picked = ctl.selection
+        if (picked != null) {
             val clipboard = LocalClipboardManager.current
+            // Copy keeps the text; Select all takes everything; Paste does what the key row's Paste does.
             Row(
-                Modifier.align(Alignment.TopEnd).padding(8.dp).background(Theme.raised, RoundedCornerShape(8.dp)).border(1.dp, Theme.border, RoundedCornerShape(8.dp)),
+                Modifier.align(Alignment.TopEnd).padding(8.dp).background(Theme.raised, RoundedCornerShape(8.dp)).border(1.dp, Theme.border, RoundedCornerShape(8.dp))
+                    .horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 androidx.compose.material3.TextButton(onClick = {
-                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(ctl.selection))
+                    copyPicked(clipboard, session, picked)
                     ctl.clearSelection()
                 }) { Text("Copy") }
+                androidx.compose.material3.TextButton(onClick = { ctl.selectAll() }) { Text("Select all") }
+                androidx.compose.material3.TextButton(onClick = {
+                    clipboardText(clipboard, session)?.let { ctl.paste(it); ctl.clearSelection() }
+                }) { Text("Paste") }
                 androidx.compose.material3.TextButton(onClick = { ctl.clearSelection() }) { Text("Clear", color = Theme.dim) }
             }
         }
     }
+}
+
+/** The clipboard's text for a paste into a terminal or the message box; says "Nothing to paste" and gives null when there is none. */
+private fun clipboardText(clipboard: androidx.compose.ui.platform.ClipboardManager, session: Session): String? {
+    val text = clipboard.getText()?.text
+    if (text.isNullOrEmpty()) { session.notice = "Nothing to paste"; return null }
+    return text
+}
+
+/** Puts a terminal selection on the clipboard (an empty one leaves it alone) and says what happened. */
+private fun copyPicked(clipboard: androidx.compose.ui.platform.ClipboardManager, session: Session, picked: herdr.term.Picked?) {
+    val p = picked ?: herdr.term.Picked("")
+    // An empty selection must not overwrite what is already on the clipboard.
+    if (Clip.shouldWrite(p.text)) clipboard.setText(androidx.compose.ui.text.AnnotatedString(p.text))
+    session.notice = Clip.copyNotice(p.text, p.cut)
 }
 
 /** A worker without a pane, shown over the tab. */
@@ -729,7 +752,7 @@ private fun Peek(session: Session, pool: TerminalPool, address: String) {
                 androidx.compose.material3.TextButton(onClick = { session.keepAsTab(address) }) { Text("Keep as tab") }
                 IconButton(onClick = { session.peek = null }) { Icon(Icons.Default.Close, "Close", tint = Theme.dim) }
             }
-            Box(Modifier.weight(1f)) { TerminalBox(pool, address) {} }
+            Box(Modifier.weight(1f)) { TerminalBox(session, pool, address) {} }
             KeyBar(session, pool)
         }
     }
@@ -769,8 +792,7 @@ fun KeyBar(session: Session, pool: TerminalPool) {
         session.drafts[a] = t
     }
     fun pasteFromClipboard(toDraft: Boolean) {
-        val text = clipboard.getText()?.text
-        if (text.isNullOrEmpty()) { session.notice = "Nothing to paste"; return }
+        val text = clipboardText(clipboard, session) ?: return
         // With the message box in use the text goes into the draft and nothing reaches the terminal.
         if (toDraft) pasteIntoDraft(text) else target()?.paste(text)
     }
@@ -803,14 +825,6 @@ fun KeyBar(session: Session, pool: TerminalPool) {
         K("type", composing) { if (address != null) session.composer[address] = !composing }
         K("A−") { pool.fontSize = (pool.fontSize - 1).coerceAtLeast(7); session.saveFont(pool.fontSize) }
         K("A+") { pool.fontSize = (pool.fontSize + 1).coerceAtMost(32); session.saveFont(pool.fontSize) }
-    }
-    LaunchedEffect(session.copied) {
-        session.copied?.let {
-            // An empty selection must not overwrite what is already on the clipboard.
-            if (Clip.shouldWrite(it)) clipboard.setText(androidx.compose.ui.text.AnnotatedString(it))
-            session.notice = Clip.copyNotice(it)
-            session.copied = null
-        }
     }
 }
 
