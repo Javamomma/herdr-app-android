@@ -57,51 +57,63 @@ object Photos {
         // Sizes are worked out as the person sees the picture, then mapped back to the stored one.
         val seenW = if (swaps) bounds.outHeight else bounds.outWidth
         val seenH = if (swaps) bounds.outWidth else bounds.outHeight
-        val (tw, th) = Attach.target(seenW, seenH)
-        val sample = if (swaps) Attach.sampleSize(bounds.outWidth, bounds.outHeight, th, tw) else Attach.sampleSize(bounds.outWidth, bounds.outHeight, tw, th)
+        fun cancelled() { if (Thread.currentThread().isInterrupted) throw InterruptedException() }
 
-        val decoded = try {
-            resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
-        } catch (_: OutOfMemoryError) { null } catch (_: Exception) { null }
-            ?: throw Unusable(Attach.Failure.Unreadable)
-
-        // One pass: scale to the target, then turn upright.
-        val matrix = Matrix().apply {
-            postScale((if (swaps) th else tw).toFloat() / decoded.width, (if (swaps) tw else th).toFloat() / decoded.height)
-            postConcat(upright)
+        /** The picture upright at the longest side [side]. */
+        fun render(side: Int): Bitmap {
+            cancelled()
+            val (tw, th) = Attach.target(seenW, seenH, side)
+            val sample = if (swaps) Attach.sampleSize(bounds.outWidth, bounds.outHeight, th, tw) else Attach.sampleSize(bounds.outWidth, bounds.outHeight, tw, th)
+            val decoded = try {
+                resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
+            } catch (_: OutOfMemoryError) { throw Unusable(Attach.Failure.TooLarge) } catch (e: java.io.IOException) { throw Unusable(Attach.Failure.Unreadable) }
+                ?: throw Unusable(Attach.Failure.Unreadable)
+            // One pass: scale to the target, then turn upright.
+            val matrix = Matrix().apply {
+                postScale((if (swaps) th else tw).toFloat() / decoded.width, (if (swaps) tw else th).toFloat() / decoded.height)
+                postConcat(upright)
+            }
+            val bitmap = try { Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true) } catch (_: OutOfMemoryError) { throw Unusable(Attach.Failure.TooLarge) }
+            if (bitmap !== decoded) decoded.recycle()
+            return bitmap
         }
-        val bitmap = try { Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true) } catch (_: OutOfMemoryError) { throw Unusable(Attach.Failure.Unreadable) }
-        if (bitmap !== decoded) decoded.recycle()
 
         val out = dir(context)
+        var bitmap: Bitmap? = null
         try {
-            val png = if (Attach.wantsPng(sourceMime)) File(out, "p.png").also { f -> f.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) } } else null
-            fun jpeg(quality: Int): File {
-                val flat = if (bitmap.hasAlpha()) Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888).also {
-                    Canvas(it).apply { drawColor(Color.WHITE); drawBitmap(bitmap, 0f, 0f, null) }
-                } else bitmap
-                return File(out, "p.jpg").also { f -> f.outputStream().use { flat.compress(Bitmap.CompressFormat.JPEG, quality, it) }; if (flat !== bitmap) flat.recycle() }
-            }
-            val chosen: Pair<File, Attach.Format> = if (png != null) {
-                // A small PNG is kept without a JPEG; a big one is compared with the JPEG.
-                val j = if (png.length() > Attach.MAX_BYTES || png.length() > Attach.PNG_KEEP_BYTES) jpeg(Attach.JPEG_QUALITIES.first()) else null
-                if (Attach.chooseFormat(png.length().toInt(), j?.length()?.toInt() ?: Int.MAX_VALUE) == Attach.Format.Png) png to Attach.Format.Png
-                else (j ?: jpeg(Attach.JPEG_QUALITIES.first())) to Attach.Format.Jpeg
-            } else {
-                jpeg(Attach.JPEG_QUALITIES.first()) to Attach.Format.Jpeg
-            }
-            var file = chosen.first
-            if (chosen.second == Attach.Format.Jpeg) {
-                for (q in Attach.JPEG_QUALITIES.drop(1)) {
-                    if (file.length() <= Attach.MAX_BYTES) break
-                    file = jpeg(q)
+            fun write(file: File, b: Bitmap, format: Bitmap.CompressFormat, quality: Int): File {
+                cancelled()
+                try {
+                    val flat = if (format == Bitmap.CompressFormat.JPEG && b.hasAlpha()) Bitmap.createBitmap(b.width, b.height, Bitmap.Config.ARGB_8888).also {
+                        Canvas(it).apply { drawColor(Color.WHITE); drawBitmap(b, 0f, 0f, null) }
+                    } else b
+                    try { file.outputStream().use { flat.compress(format, quality, it) } } finally { if (flat !== b) flat.recycle() }
+                } catch (_: java.io.IOException) {
+                    throw Unusable(Attach.Failure.Local)
+                } catch (_: OutOfMemoryError) {
+                    throw Unusable(Attach.Failure.TooLarge)
                 }
+                return file
             }
-            if (file.length() > Attach.MAX_BYTES) throw Unusable(Attach.Failure.TooLarge)
-            if (png != null && png !== file) png.delete()
-            return Ready(file, Attach.fileName(nowMs, ZoneId.systemDefault(), chosen.second))
+            var current = render(Attach.MAX_SIDE).also { bitmap = it }
+            val first = Attach.LADDER.first()
+            // A PNG source stays PNG when it is small, or not much bigger than the JPEG.
+            if (Attach.wantsPng(sourceMime)) {
+                val png = write(File(out, "p.png"), current, Bitmap.CompressFormat.PNG, 100)
+                val keep = png.length() <= Attach.PNG_KEEP_BYTES ||
+                    Attach.chooseFormat(png.length().toInt(), write(File(out, "p.jpg"), current, Bitmap.CompressFormat.JPEG, first.quality).length().toInt()) == Attach.Format.Png
+                if (keep && png.length() <= Attach.MAX_BYTES) return Ready(png, Attach.fileName(nowMs, ZoneId.systemDefault(), Attach.Format.Png))
+                png.delete()
+            }
+            var side = Attach.MAX_SIDE
+            val jpeg = Attach.fit { step ->
+                if (step.side != side) { current.recycle(); current = render(step.side).also { bitmap = it }; side = step.side }
+                val f = write(File(out, "p.jpg"), current, Bitmap.CompressFormat.JPEG, step.quality)
+                f to f.length()
+            } ?: throw Unusable(Attach.Failure.TooLarge)
+            return Ready(jpeg, Attach.fileName(nowMs, ZoneId.systemDefault(), Attach.Format.Jpeg))
         } finally {
-            bitmap.recycle()
+            bitmap?.recycle()
         }
     }
 }

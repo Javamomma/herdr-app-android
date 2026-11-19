@@ -17,7 +17,10 @@ import herdr.core.Alerting
 import herdr.core.AgentTree
 import herdr.core.Axis
 import herdr.core.Branch
+import herdr.core.FilePart
 import herdr.core.FindItem
+import herdr.core.Reading
+import herdr.core.Reply
 import herdr.core.LabelQueue
 import herdr.core.Labels
 import herdr.core.stackPath
@@ -133,6 +136,10 @@ data class Agent(
     val pinned: Boolean = false,
     /** What the menu offers: Mark read when unread, else Mark unread (not at turn 0). */
     val mark: Mark = Mark.NONE,
+    /** The agent's last reply as plain text (the status message it reported; the Mac's helper cuts it at 600), or empty. */
+    val reply: String = "",
+    /** The raw reply was exactly the helper's limit long: it may have been cut (decided before any trimming). */
+    val replyMaybeCut: Boolean = false,
 )
 
 /** Where a pane lives. */
@@ -162,6 +169,11 @@ class Session(private val context: Context) {
         get() = connState.value
         private set(v) {
             connState.value = v
+            // A picture shared while the link was coming up must not pop up long after it failed.
+            if ((v is Conn.Failed || v is Conn.Idle) && sharedPhoto != null) {
+                sharedPhoto = null
+                notice = Attach.Failure.NotConnected.notice
+            }
             onConn?.invoke(v)
         }
     /** Told when the connection's state changes (the background service's status line). */
@@ -515,6 +527,7 @@ class Session(private val context: Context) {
     private fun resetView() {
         helpersOpen.clear()
         stackShown.clear()
+        replyOpen = null
     }
 
     fun disconnect() {
@@ -699,6 +712,7 @@ class Session(private val context: Context) {
      * question. Connects first if the app isn't connected.
      */
     suspend fun answerShown(address: String, mark: String, deny: Boolean = false, reply: String? = null): Answered {
+        if (Attach.blocksSend(attaching, address)) return Answered.Failed("A photo is still uploading to that agent. Try again when it is done.")
         if (core == null) {
             if (demo || !profile.ready) return Answered.Offline
             connect()
@@ -744,6 +758,7 @@ class Session(private val context: Context) {
      * dangerous questions need [held] (a press-and-hold).
      */
     fun choose(address: String, label: String, mark: String, held: Boolean) = attempt("Cannot answer") {
+        if (Attach.blocksSend(attaching, address)) { notice = "A photo is still uploading to that agent. Try again when it is done."; return@attempt }
         if (agents().firstOrNull { it.address == address }?.state != "blocked") {
             notice = "It isn't waiting any more."
             return@attempt
@@ -1082,7 +1097,7 @@ class Session(private val context: Context) {
                 address = address,
                 state = Seen.display(reported, turn, seen),
                 app = status["app"].str?.ifEmpty { null } ?: t["foreground"]["name"].str ?: "agent",
-                title = status["title"].str?.ifEmpty { null } ?: status["msg"].str?.ifEmpty { null } ?: t["title"].str ?: "",
+                title = status["title"].str?.ifEmpty { null } ?: t["title"].str ?: "",
                 parent = parentOfTerminal(address),
                 spaceId = place?.space?.id ?: labels["herdr.space"].str?.let { qualify(it, machine) },
                 tabId = place?.tab?.id ?: labels["herdr.tab"].str?.let { qualify(it, machine) },
@@ -1090,6 +1105,8 @@ class Session(private val context: Context) {
                 turn = turn,
                 pinned = Pins.isPinned(labels[Labels.PINNED].str),
                 mark = Seen.mark(reported, turn, seen),
+                reply = Reply.clean(status["msg"].str),
+                replyMaybeCut = Reply.maybeCut(status["msg"].str),
             )
         }.sortedBy { URGENCY.indexOf(it.state).let { i -> if (i < 0) 99 else i } }
         return Pins.order(list) { it.pinned }
@@ -1373,10 +1390,14 @@ class Session(private val context: Context) {
         return pane?.terminal
     }
 
-    /** The terminal a photo is uploading to, or null. One upload at a time. */
+    /** The terminal a photo is uploading to, or null. One upload at a time; Send and answers to it wait (its frame holds the writer). */
     var attaching by mutableStateOf<String?>(null)
         private set
+    /** Cancelled, but the upload has not finished leaving yet: nothing new may start behind it. */
+    var attachCancelling by mutableStateOf(false)
+        private set
     private var attachJob: Job? = null
+    private val attachWorker = java.util.concurrent.atomic.AtomicBoolean(false)
     /** A picture shared to Herdr, waiting for the person to pick an agent (the chooser shows once connected and unlocked). */
     var sharedPhoto by mutableStateOf<android.net.Uri?>(null)
     /** The agent opened last, kept on the phone: the share chooser's preselection. */
@@ -1391,6 +1412,10 @@ class Session(private val context: Context) {
 
     val canAttach: Boolean get() = conn is Conn.Connected && attaching == null && Attach.supported(core)
 
+    /** The message box's text and selection last seen for a terminal, so a photo's path can go at the cursor. */
+    class DraftCursor(val text: String, val start: Int, val end: Int)
+    val draftCursors = HashMap<String, DraftCursor>()
+
     /**
      * Uploads a picture beside [address] (`terminal.put`) and calls [done] with the path the core gives, on the
      * main thread. Nothing is sent to the terminal and nothing takes control of it: the caller edits the draft.
@@ -1402,16 +1427,27 @@ class Session(private val context: Context) {
         if (conn !is Conn.Connected || c == null) { notice = Attach.Failure.NotConnected.notice; return }
         if (!Attach.supported(c)) { notice = Attach.Failure.Unsupported.notice; return }
         attaching = address
+        attachCancelling = false
+        var cancelled = false
         attachJob = main.launch {
             try {
                 val outcome = kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
+                    attachWorker.set(true)
                     try {
                         val ready = Photos.prepare(context, uri)
-                        Attach.upload(c, address, ready.name, ready.file.readBytes())
+                        val bytes = ready.file.readBytes()
+                        // Checked again right before the frame is queued: a cancel never leaves one behind.
+                        if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                        Attach.upload(c, address, ready.name, bytes)
                     } catch (e: Photos.Unusable) {
                         Attach.Outcome.Failed(e.why)
+                    } catch (e: java.io.IOException) {
+                        Attach.Outcome.Failed(Attach.Failure.Local)
+                    } catch (_: OutOfMemoryError) {
+                        Attach.Outcome.Failed(Attach.Failure.TooLarge)
                     } finally {
                         Photos.sweep(context)
+                        attachWorker.set(false)
                     }
                 }
                 when (outcome) {
@@ -1419,13 +1455,25 @@ class Session(private val context: Context) {
                     is Attach.Outcome.Failed -> notice = outcome.why.notice
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
-                Photos.sweep(context)
+                cancelled = true
                 throw e
             } catch (e: Exception) {
-                notice = Attach.Failure.Refused(e.message.orEmpty().lineSequence().firstOrNull().orEmpty().take(200).ifEmpty { "something went wrong" }).notice
+                // Never the message itself: it can hold a path on this phone.
+                notice = Attach.Failure.Local.notice
             } finally {
-                attaching = null
                 attachJob = null
+                if (!cancelled) {
+                    attaching = null
+                } else {
+                    // Hold the next upload (and Send) until the worker has stopped and a frame already being written has left.
+                    attachCancelling = true
+                    main.launch {
+                        var waited = 0
+                        while ((attachWorker.get() || c.idle().not()) && !c.closed && waited++ < 1200) delay(100)
+                        attaching = null
+                        attachCancelling = false
+                    }
+                }
             }
         }
     }
@@ -1435,11 +1483,17 @@ class Session(private val context: Context) {
         attachJob?.cancel()
     }
 
-    /** Adds [path] at the end of [address]'s draft (when the cursor is not at hand, e.g. after a share). */
-    fun appendAttached(address: String, path: String) {
+    /**
+     * Puts [path] into [address]'s draft as it is now: at the cursor last seen for that exact text, else at the end.
+     * Always works on the current draft, so what was typed meanwhile is kept, whether or not the box is on screen.
+     */
+    fun insertAttached(address: String, path: String) {
         val d = drafts[address] ?: ""
-        AttachPath.insert(d, d.length, d.length, path)?.let { drafts[address] = it.first }
-            ?: run { notice = "That path cannot be added to a message." }
+        val at = draftCursors[address]?.takeIf { it.text == d }
+        val r = AttachPath.insert(d, at?.start ?: d.length, at?.end ?: d.length, path)
+        if (r == null) { notice = "That path cannot be added to a message."; return }
+        drafts[address] = r.first
+        draftCursors[address] = DraftCursor(r.first, r.second, r.second)
     }
 
     /** Per terminal: the Type composer turned on or off by hand (else: on for agents). */
@@ -1468,10 +1522,32 @@ class Session(private val context: Context) {
         return out
     }
 
-    suspend fun readFile(machine: String?, path: String): String {
-        val r = io { it.call("file.read", obj("path" to path, "on" to machine, "limit" to 20_000), timeoutMs = 30_000) }
-        return r["text"].str ?: ""
+    /**
+     * Whole lines of a file from line [offset], at most `Reading.LINE_LIMIT` of them (the core also stops at 8 MB).
+     * Not text throws with `Reading.BINARY_NOTICE`.
+     */
+    suspend fun readFile(machine: String?, path: String, offset: Int = 1): FilePart {
+        val r = try {
+            io { it.call("file.read", obj("path" to path, "on" to machine, "offset" to offset, "limit" to Reading.LINE_LIMIT), timeoutMs = 30_000) }
+        } catch (e: RpcException) {
+            throw IllegalStateException(Reading.errorText(e.kind, e.message), e)
+        }
+        // Counting bytes and reading a big answer is not main-thread work.
+        return withContext(Dispatchers.Default) {
+            FilePart.of(r).also { check(it.first == offset) { "The core answered from line ${it.first}, not $offset." } }
+        }
     }
+
+    /** Files and Changes wrap long lines (this phone's choice, never shared). */
+    var wrapLines by mutableStateOf(viewPrefs.getBoolean("wrapLines", true))
+        private set
+    fun updateWrapLines(wrap: Boolean) { wrapLines = wrap; viewPrefs.edit().putBoolean("wrapLines", wrap).apply() }
+
+    /** The file viewer's size in sp: the terminal font setting, kept in a readable range. */
+    fun readerFontSp(): Int = viewPrefs.getInt("font", 13).coerceIn(10, 16)
+
+    /** The agent whose full last reply is open in the reader sheet (nothing is attached or shown of its terminal). */
+    var replyOpen by mutableStateOf<String?>(null)
 
     /** Agents found on the Mac's PATH (login shell), for the + menu. */
     suspend fun installedAgents(machine: String?): List<String> = installed(machine, Agents.known.map { it.command })

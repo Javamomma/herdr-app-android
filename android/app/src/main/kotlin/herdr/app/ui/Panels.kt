@@ -2,7 +2,6 @@ package herdr.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -30,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +41,11 @@ import androidx.compose.ui.unit.sp
 import herdr.app.Session
 import herdr.app.Theme
 import herdr.app.term.TerminalPool
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import herdr.core.ReadDoc
+import herdr.core.Reading
 import herdr.core.machineOf
 
 /** Files or Changes for the focused terminal's folder, read through the core on its machine. */
@@ -123,9 +127,7 @@ private fun Files(session: Session, pool: TerminalPool, machine: String?, start:
     }
     val file = open
     if (file != null) {
-        var text by remember(file) { mutableStateOf<Load<String>>(Load.Busy) }
-        LaunchedEffect(file) { text = runCatching { session.readFile(machine, file) }.fold({ Load.Done(it) }, { Load.Failed(it.message ?: "cannot read") }) }
-        Loaded(text) { CodeView(it.lines()) { Theme.text } }
+        FileViewer(session, machine, file)
         return
     }
     Loaded(list) { entries ->
@@ -160,25 +162,16 @@ private fun Changes(session: Session, machine: String?, cwd: String) {
     }
     val file = open
     if (file != null) {
-        var diff by remember(file, reload) { mutableStateOf<Load<String>>(Load.Busy) }
+        var diff by remember(file, reload) { mutableStateOf<Load<ReadDoc>>(Load.Busy) }
         LaunchedEffect(file, reload) {
             diff = runCatching {
-                session.exec(machine, listOf("git", "-C", cwd, "diff", "HEAD", "--", file)).ifBlank {
-                    session.readFile(machine, join(cwd, file)).lines().joinToString("\n") { "+$it" }
+                val text = session.exec(machine, listOf("git", "-C", cwd, "diff", "HEAD", "--", file)).ifBlank {
+                    Reading.addedDiff(session.readFile(machine, join(cwd, file)))
                 }
+                withContext(Dispatchers.Default) { ReadDoc.whole(text) }
             }.fold({ Load.Done(it) }, { Load.Failed(it.message ?: "cannot diff") })
         }
-        Loaded(diff) { text ->
-            CodeView(text.lines()) { line ->
-                when {
-                    line.startsWith("+++") || line.startsWith("---") -> Theme.dim
-                    line.startsWith("+") -> Color(0xFF98C379)
-                    line.startsWith("-") -> Color(0xFFE06C75)
-                    line.startsWith("@@") -> Color(0xFF61AFEF)
-                    else -> Theme.text
-                }
-            }
-        }
+        Loaded(diff) { doc -> DocPane(session, doc, colorOf = DIFF_COLOURS) }
         return
     }
     Loaded(status) { lines ->
@@ -201,15 +194,69 @@ private fun Changes(session: Session, machine: String?, cwd: String) {
     }
 }
 
+/** The +/- colouring of a diff, per line. */
+private val DIFF_COLOURS: (String) -> Color = { line ->
+    when {
+        line.startsWith("+++") || line.startsWith("---") -> Theme.dim
+        line.startsWith("+") -> Color(0xFF98C379)
+        line.startsWith("-") -> Color(0xFFE06C75)
+        line.startsWith("@@") -> Color(0xFF61AFEF)
+        else -> Theme.text
+    }
+}
+
+/** A file: wrapped (or sideways) monospace text you can select, a notice when the core cut it, "Load more", and no garbage for binary. */
 @Composable
-private fun CodeView(lines: List<String>, color: (String) -> Color) {
-    val h = rememberScrollState()
-    LazyColumn(Modifier.fillMaxSize().background(Theme.bg).horizontalScroll(h)) {
-        items(lines) { line ->
-            Text(
-                line.ifEmpty { " " }, color = color(line), fontSize = 12.sp, fontFamily = FontFamily.Monospace,
-                softWrap = false, modifier = Modifier.padding(horizontal = 10.dp),
-            )
+private fun FileViewer(session: Session, machine: String?, file: String) {
+    // null = the core's text is really bytes.
+    var opened by remember(file, machine) { mutableStateOf<Load<ReadDoc?>>(Load.Busy) }
+    var more by remember(file, machine) { mutableStateOf<String?>(null) }
+    var loadingMore by remember(file, machine) { mutableStateOf(false) }
+    var stalled by remember(file, machine) { mutableStateOf(false) }
+    var restart by remember(file, machine) { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(file, machine, restart) {
+        opened = Load.Busy
+        stalled = false
+        more = null
+        opened = runCatching {
+            val p = session.readFile(machine, file)
+            withContext(Dispatchers.Default) { if (Reading.looksBinary(p.text)) null else ReadDoc.of(p) }
+        }.fold({ Load.Done(it) }, { Load.Failed(it.message ?: "cannot read") })
+    }
+    Loaded(opened) { doc ->
+        if (doc == null) {
+            Text(Reading.BINARY_NOTICE, color = Theme.dim, fontSize = 13.sp, modifier = Modifier.padding(12.dp))
+            return@Loaded
+        }
+        DocPane(session, doc) {
+            val notice = Reading.notice(doc)
+            if (notice != null) {
+                Row(Modifier.fillMaxWidth().background(Theme.panel).padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(more ?: if (stalled) Reading.NO_MORE else notice, color = Theme.dim, fontSize = 12.sp, modifier = Modifier.weight(1f).padding(vertical = 6.dp))
+                    val next = if (stalled) null else Reading.nextOffset(doc)
+                    if (next != null) {
+                        TextButton(enabled = !loadingMore, onClick = {
+                            loadingMore = true
+                            more = null
+                            scope.launch {
+                                val r = runCatching {
+                                    val m = session.readFile(machine, file, next)
+                                    withContext(Dispatchers.Default) { doc.more(m) }
+                                }
+                                loadingMore = false
+                                r.onSuccess { res ->
+                                    when (res) {
+                                        is ReadDoc.More.Joined -> opened = Load.Done(res.doc)
+                                        ReadDoc.More.NoProgress -> stalled = true
+                                        ReadDoc.More.Changed -> restart++
+                                    }
+                                }.onFailure { more = "Could not load more: ${it.message}" }
+                            }
+                        }) { Text(if (loadingMore) "Loading…" else "Load more") }
+                    }
+                }
+            }
         }
     }
 }

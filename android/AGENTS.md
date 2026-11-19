@@ -146,16 +146,20 @@ From the 2026-11-12 repair build. Read before changing these paths.
   beside the terminal on the terminal's machine (removed with the terminal), so nothing lands in a project's `git status`; the
   call does not let us pick the place, only the name, and `machine/t7` addresses work. Only `put` is used: no `machine.exec` fallback;
   a core without `terminal.put` in its hello says to `hc update`. Pictures come from the photo picker (`PickVisualMedia`, images) or a
-  share (`ACTION_SEND`, image type, one image): read through the content URI, no permission, no broad storage. Shrink: longest side 2000 px
-  (never enlarged), upright by EXIF, re-encoded (drops location); JPEG at 85, then 70 and 55 if over the cap; a PNG source stays PNG unless
-  it is over 1.5 MB and 3x the JPEG (or over the cap; alpha is drawn on white then). Cap 5 MB after shrinking (the core's own is 8 MB). Name:
-  `photo-yyyyMMdd-HHmmss.jpg|png`, never the original. The path goes into the draft with `AttachPath.insert` (like Paste, `Clip.insertAt`): a
-  space before it unless at the start or after white space; quoted in single quotes (`'` as `'\''`) unless it only has letters, digits and
-  `_ @ % + = : , . / ~ -`; a path with a line break is refused. Timeout 20 s plus 1 s per 50 KB, at most 3 min; cancel interrupts the wait
-  (a file may still have arrived: harmless). A failure only shows a notice; the draft is untouched. It never takes control while watching:
-  it is a core call and a draft edit. A share arriving locked waits (the chooser is drawn only inside the unlocked app); not connected: notice
-  and the picture is dropped; the chooser preselects the last agent opened (`Session.lastAgent`), else the one in view, else the first. The temp
-  file in `cache/attach` is deleted after every upload and at start. Rejected: sending the picture on, writing it through `machine.exec`.
+  share (`ACTION_SEND`, image type, one image, `content` addresses only, extra read without a cast): read through the content URI, no
+  permission. A share is ignored when the activity is restored or launched from history, and dropped (with a notice) if the connection fails
+  before the chooser is answered. **The request is one frame on the connection's single writer**, so keys, credits and Send wait behind it:
+  hence a small cap and, while a terminal is uploading (`Session.attaching`), Send and answers to it are off (`Attach.blocksSend`).
+  Shrink ladder (`Attach.LADDER`, first that fits 2 MB): 2000 px q85, 2000 q70, 1600 q70, 1280 q70, 1280 q55, then refuse; upright by EXIF,
+  re-encoded (drops location); a PNG source stays PNG unless it is over 1.5 MB and 3x the JPEG (or over the cap; alpha is drawn on white
+  then). Name `photo-yyyyMMdd-HHmmss.jpg|png`, never the original. The path goes into the draft through `Session.insertAttached` (current
+  draft, cursor last seen for exactly that text, else the end; never from a composable's old state) with `AttachPath.insert`: a space before
+  unless at the start or after white space, one after unless at the end or before white space; single-quoted (`'` as `'\\''`) unless only
+  `A-Za-z0-9_@%+=:,./~-`; any control character or over 1024 characters is refused. Timeout 20 s + 1 s per 50 KB of base64, max 3 min.
+  Cancel interrupts: a frame still queued is taken back (`CoreClient.call`), and the next upload waits until the worker has stopped and
+  the writer is idle (`CoreClient.idle`). Local failures (storage, memory) have their own notice with no path. A failure leaves the draft
+  alone. Never takes control while watching. Temp file in `cache/attach`, swept after every upload and at start. Rejected: writing the
+  picture through `machine.exec`.
 - **Find and helpers** (`Find`, `AgentTree` in `protocol/Find.kt`, `ui/FindPanel.kt`, `Session.findItems`/`showTerminal`/`helpersOpen`): the
   search button (agents list in the left panel, and the cover screen's list) replaces the list with `FindPanel`; it searches every live terminal of
   the core (`Session.terminals`: agents and plain shells, all spaces and tabs, all machines), not only agents. Every typed word must be found
@@ -177,6 +181,28 @@ From the 2026-11-12 repair build. Read before changing these paths.
   (`placeIndex`, rebuilt on layout change) and `derivedStateOf`. `parent` for a remote helper is unverified against a real remote core (no machine
   here, `hc rpc` absent): `AgentTree.resolveParent` tries `machine/parent` first, then the value as given. A parent chain through a plain terminal
   goes to the nearest agent (`AgentTree.nearestAgent`).
+- **Reading** (`Reading`, `ReadDoc`, `Chunks`, `Reply` in `protocol/Reading.kt`, `ui/Reader.kt`, `ui/Panels.kt`, `Session.readFile`): `file.read` takes
+  `offset` (counted from 1: `files.rs` rejects 0 and skips `offset - 1` lines) and `limit` in **lines** (we ask for 20,000); the core also stops at 8 MB
+  of whole lines. The answer has `first`, `last`, `lines`: cut is `last < lines`; "Load more" is one read at `last + 1`, joined by `ReadDoc.more`
+  (only the new text is cleaned and split; no new line = "Nothing more could be loaded"; an answer that does not follow on = the file changed, reload).
+  The first read must answer `first == 1`. Loading stops at 4 MB (`CEILING_BYTES`, said in the notice). Bytes are counted once in `FilePart` and kept as
+  a total; reading, cleaning, splitting and Copy all run on `Dispatchers.Default`. A non-UTF-8 file is the error kind `not_text`; valid text with more than
+  1 in 20 NUL/control/U+FFFD in its first 8,000 characters is also called binary: one notice, no drawing.
+  What is drawn and copied is `Reading.display(raw)`: CRLF to LF, every other control or text-direction character one U+FFFD with the notice "Hidden
+  control characters were replaced". Blocks (`Chunks`): each ends with its own `\n` except the last, so a copy across a block border keeps the lines
+  (Compose joins selectables with nothing); the empty line a trailing break adds is cut off by a layout modifier, and a blank last line is a spacer.
+  Up to 60,000 characters it is ONE block in a scrolling `Column` (Select all reaches everything); above, blocks of 200 lines / 8,000 characters in a
+  `LazyColumn` (no freeze), where a selection only reaches what is composed: a standing line says so and "Copy all" (first 200,000 characters kept, the
+  notice gives the numbers) copies the loaded text. A line over 8,000 characters is cut (never in a surrogate pair, combining mark or ZWJ sequence); its
+  pieces keep the line's colour but are drawn as separate rows. Wrap (default on) is `viewPrefs` `wrapLines`; the font is the terminal's `font` setting held
+  to 10-16 sp. Not measured on a device: the 60,000 limit, the 200-line block and the trailing-line trim. Changes uses the same viewer with per-line colours.
+  **Last reply** is the terminal record's `status.msg` (OSC 7501 `msg`), `Agent.reply` after `Reply.clean` (escape sequences, controls and direction overrides
+  removed; plain `Text`, never linkified or run). The Mac helper's cut at 600 characters is not in the core's source: `Agent.replyMaybeCut` is true only
+  when the RAW reply is exactly 600 characters (decided before trimming; longer or shorter ones are not cut), and the sheet says "may be cut short".
+  The card shows the reply only for done/idle agents (`Reply.showsOnCard`); a blocked or working card keeps its terminal tail. `Reply.excerpt` keeps 4 (cover) or
+  3 (list) lines; "Show all" when it left text out, the card clips it, or it may be cut. The sheet (`session.replyOpen`, cleared with the view) never attaches or
+  shows a terminal and counts as a dialog over the panes (`Looking.dialogOver`), so nothing under it is marked seen. A later build could read the full reply
+  from the agent's transcript (label `claude.transcript`): not done, by decision.
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 

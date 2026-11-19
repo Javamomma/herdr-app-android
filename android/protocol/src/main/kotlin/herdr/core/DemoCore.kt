@@ -76,8 +76,18 @@ class DemoCore {
         )
     }
 
-    private fun status(state: String, app: String, title: String, kind: String? = null) =
-        obj("state" to state, "app" to app, "title" to title, "msg" to "", "kind" to kind)
+    private fun status(state: String, app: String, title: String, kind: String? = null, msg: String = "") =
+        obj("state" to state, "app" to app, "title" to title, "msg" to msg, "kind" to kind)
+
+    /** The demo's files as lines with their breaks: a short readme and a log long enough to be cut at the read limit. */
+    private fun demoFile(path: String): List<String> =
+        if (path.endsWith("big.log")) List(25_000) { "2026-11-19 12:%02d:%02d demo line %d: nothing to see, a long enough line to wrap on a narrow screen\n".format(it / 60 % 60, it % 60, it + 1) }
+        else listOf("# Herdr for Android\n", "\n", "A demo file. In the real app this is read from your Mac.\n")
+
+    /** A last reply as the Mac's helper reports it: cut at 600 characters. */
+    private val longReply = ("I upgraded the database to Postgres 17 and ran the migration on a copy first. The dump restored in 41 seconds and every check passed. " +
+        "Two things need your eye before this goes live: the connection pool setting max_connections is now 200 in the new config, and the nightly backup job still points at the old data directory, so I left it disabled. " +
+        "The staging run shows no slow queries. If you agree I will schedule the switch for the quiet window tonight and keep the old cluster for a week as a fallback, with the replication slot dropped so it does not fill the disk while it waits for the cut over to finish properly.").take(600)
 
     private fun seed() {
         val home = "/Users/you"
@@ -87,8 +97,8 @@ class DemoCore {
         terminals["t4"] = rec("t4", "codex", "$home/src/website", "codex", status("working", "Codex", "Refactor the nav bar"), turn = 2, seen = 2, space = "sp2", tab = "tb3", pinned = true)
         terminals["t5"] = rec("t5", "claude", "$home/src/website", "claude", status("working", "Claude Code", "Write e2e tests"), turn = 1, seen = 1, parent = "t4", space = "sp2", tab = "tb3")
         // A second helper of the same parent (done, not yet seen: the helpers show open), and a plain shell in another space's second tab.
-        terminals["t8"] = rec("t8", "claude", "$home/src/website", "claude", status("done", "Claude Code", "Review the nav diff"), turn = 3, seen = 2, parent = "t4", space = "sp2", tab = "tb3")
-        terminals["t6"] = rec("t6", "claude", "$home/src/infra", "claude", status("done", "Claude Code", "Upgrade to Postgres 17"), turn = 6, seen = 5, space = "sp3", tab = "tb4")
+        terminals["t8"] = rec("t8", "claude", "$home/src/website", "claude", status("done", "Claude Code", "Review the nav diff", msg = "Reviewed the nav diff. Two small notes: the focus ring is clipped on the mobile menu, and the hover colour is not used anywhere."), turn = 3, seen = 2, parent = "t4", space = "sp2", tab = "tb3")
+        terminals["t6"] = rec("t6", "claude", "$home/src/infra", "claude", status("done", "Claude Code", "Upgrade to Postgres 17", msg = longReply), turn = 6, seen = 5, space = "sp3", tab = "tb4")
         terminals["t10"] = rec("t10", "zsh", "$home/src/infra/logs", "zsh", space = "sp3", tab = "tb5")
         terminals["vps/t9"] = rec("vps/t9", "htop", "/srv/app", "htop", space = "vps/sp9", tab = "vps/tb9")
 
@@ -339,7 +349,7 @@ class DemoCore {
                 val argv = p["argv"].arr.mapNotNull { it.str }
                 val out = when {
                     argv.any { it.contains("panel.py queue") } -> DEMO_QUEUE
-                    argv.firstOrNull() == "ls" -> "app/\nprotocol/\nterminal/\nREADME.md\nbuild.gradle.kts\nsettings.gradle.kts\n"
+                    argv.firstOrNull() == "ls" -> "app/\nprotocol/\nterminal/\nREADME.md\nbig.log\nbuild.gradle.kts\nimage.bin\nsettings.gradle.kts\n"
                     argv.firstOrNull() == "git" && "status" in argv -> "## main...origin/main\n M app/src/main/kotlin/herdr/app/ui/Workspace.kt\n?? docs/demo.md\n"
                     argv.firstOrNull() == "git" && "diff" in argv -> "--- a/Workspace.kt\n+++ b/Workspace.kt\n@@ -642,3 +642,4 @@\n-        K(\"type\", composing)\n+        K(\"⌨\", imeVisible)\n         K(\"esc\")\n+        K(\"^C\")\n"
                     argv.any { it.contains("herdr-has") } -> "herdr-has:claude\nherdr-has:codex\nherdr-has:tuios\n"
@@ -348,7 +358,19 @@ class DemoCore {
                 }
                 reply(id, obj("code" to 0, "ms" to 3, "stdout" to Base64.getEncoder().encodeToString(out.toByteArray()), "stderr" to "", "timed_out" to false, "truncated" to false))
             }
-            "file.read" -> reply(id, obj("text" to "# Herdr for Android\n\nA demo file. In the real app this is read from your Mac.\n", "first" to 1, "last" to 3, "lines" to 3))
+            "file.read" -> {
+                val path = p["path"].str ?: ""
+                if (path.endsWith("image.bin")) { error(id, "$path is not UTF-8 text", "not_text"); return }
+                // Like the core: whole lines from `offset` (from 1), at most `limit` of them.
+                val all = demoFile(path)
+                val first = (p["offset"].long ?: 1).toInt()
+                val limit = (p["limit"].long ?: Long.MAX_VALUE).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                val sb = StringBuilder()
+                var n = 0
+                var i = first - 1
+                while (i < all.size && n < limit) { sb.append(all[i]); n++; i++ }
+                reply(id, obj("text" to sb.toString(), "first" to first, "last" to first + n - 1, "lines" to all.size))
+            }
             else -> reply(id, obj())
         }
     }

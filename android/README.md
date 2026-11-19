@@ -52,7 +52,9 @@ at the apps made for its socket API, such as
 - **Saved commands** (⚡): one tap types `git status` or starts Claude Code in
   a new tab.
 - **Home-screen widget**: blocked / done / working at a glance.
-- **Files and Changes** panels for the focused terminal's folder.
+- **Files and Changes** panels for the focused terminal's folder: wrapped or sideways monospace
+  text you can select, "Load more" for long files, coloured diffs.
+- **Last reply** on each agent card (first lines, plain text); "Show all" opens it to read and copy.
 - **App lock** with fingerprint, face or PIN.
 - **Other machines** you added on the Mac (`hc machine add`) show up too.
 

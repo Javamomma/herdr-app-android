@@ -45,14 +45,13 @@ release.
 
 ## The landscape (November 2026)
 
-The owner reports that the official Herdr app shipped on 2026-11-09/10 and
-speaks herdr-core over SSH (not verified by the 2026-11-12 audit). This app
-has no public release and is Arshia's own client, built for his Galaxy Z
-Fold 7. The official app's public description, as the audit read it, is: see which agents need you, open the real terminal,
-type, paste a screenshot, talk to it. Nobody has run it yet, so whether it
-covers his terminal work, the Fold's two screens and safe answering is
-unknown. Try it before investing in attachments, speech or new terminal
-features here.
+The official Herdr app shipped on 2026-11-09/10 and speaks herdr-core over SSH
+(not verified by the 2026-11-12 audit). This app has no public release and is
+Arshia's own client, built for his Galaxy Z Fold 7. After a few days with the
+official app his verdict (2026-11-18) was: "it's fine, like ours better". So
+this app keeps going, as his own client, and takes the improvements he asked
+for below. Photo and screenshot attach, which was held back until he had tried
+the official app, is no longer deferred.
 
 What this app keeps for itself: his queue (below), the two Fold layouts
 (cover and inner), and answers from notifications.
@@ -62,32 +61,41 @@ herdr socket API, not herdr-core. Their ideas were borrowed in 0.2.0.
 
 ## Next, in order
 
+Arshia's order of 2026-11-18. "Built" means written, tested in the JVM tests and
+compiled, but not yet checked on the phone.
+
 1. **Repair build**, tested on the phone: hide the left panel at every width
    (Back closes it); Paste beside Esc, going to the box you are typing in;
    no crash when long-pressing older terminal text; Copy with nothing
    selected leaves the clipboard alone; Send keeps the draft unless the
    message was delivered; answer buttons only answer the question that was
    on screen; unnamed tabs show their agent's title.
-2. Pins, mark read/unread and a correct "seen" (shared `herdr.pinned` / `herdr.seen` labels, docs/labels.md): built, awaiting phone checks.
-3. **Read-only Queue** (built, awaiting phone checks): an optional list of what is waiting on him, from the
+2. **Pins, mark read/unread and a correct "seen"** (shared `herdr.pinned` /
+   `herdr.seen` labels, docs/labels.md): built, awaiting phone checks.
+3. **Read-only Queue**: built, awaiting phone checks. An optional list of what is waiting on him, from the
    Mac's `panel.py queue` over the existing SSH session, with a stale / could
-   not load state. Actions come later, one family at a time.
-4. **Attach a photo** (built, awaiting phone checks): 📎 by the Type box (Android photo picker) and a Share target;
-   shrunk, uploaded with core `terminal.put`, path inserted into the draft. Needs core 0.1.21.
-5. **Find and helper nesting** (built, awaiting phone checks): a search button on the agents list finds any terminal of the
-   core by name, title, folder and machine and jumps to it; helpers (terminals with a `parent`) nest under their agent.
-6. Small reading and reply improvements (wrapped, selectable file viewer;
-   last reply on agent cards; the helper that supplies the last reply cuts it
-   at 600 characters, so show it as an excerpt with a way to fetch the rest).
-7. A private release signing key, and trying the CI build on the phone
-   without the cable.
+   not load state. Actions come later, one family at a time (not built).
+4. **Attach a photo or screenshot**: built, awaiting phone checks. 📎 by the Type box (Android photo picker)
+   and a Share target; shrunk, uploaded with core `terminal.put`, path inserted into the draft. Needs core 0.1.21.
+5. **Find any terminal, helpers nest under their agent**: built, awaiting phone checks. A search button on the
+   agents list finds any terminal of the core by name, title, folder and machine and jumps to it; helpers
+   (terminals with a `parent`) nest under their agent.
+6. **A private release signing key, without saved passwords**: a separate build (not on this branch); not
+   yet checked here. Also trying the CI build on the phone without the cable.
+7. **Reading improvements** (this build, built, awaiting phone checks): the file viewer wraps lines (toggle,
+   remembered), selects text across the file, says when a file was cut and offers "Load more", and refuses
+   binary; Changes shares the wrapping and selection. Agent cards show the start of the last reply (4 lines on
+   the cover screen, 3 in the list) with "Show all" opening a reader sheet.
+   Not built: the full reply beyond the 600 characters the Mac's helper reports. That needs a Mac-side piece
+   (the helper reporting the whole reply, or a command that returns it); reading Claude's transcript file
+   from the phone was ruled out for this build.
 
 Considered and rejected (audit 2026-11-12): public release on F-Droid or
 Google Play while the official app exists; AI summaries or any model in the
 app; a rewrite in another toolkit or a different terminal engine; a general
 panel format; replacing or splitting this app before trying the official one.
 Deferred: a microphone button, a whole-conversation
-view, HTML pages.
+view, HTML pages. No longer deferred: photo and screenshot attach (built, item 4).
 
 ## Decisions
 
@@ -109,3 +117,7 @@ view, HTML pages.
 - 2026-11-12: The official Herdr app exists and speaks herdr-core; no public
   release of this app (F-Droid and Google Play dropped). Next: repair build,
   then a read-only Queue.
+- 2026-11-18: After a few days with the official app, Arshia: "it's fine, like ours
+  better". This app keeps going. Order of work: pins/unread/seen, read-only Queue, photo
+  and screenshot attach, find any terminal, a private signing key without saved
+  passwords, reading improvements. Photo attach is no longer deferred.
