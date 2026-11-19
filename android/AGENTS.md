@@ -108,17 +108,28 @@ From the 2026-11-12 repair build. Read before changing these paths.
   (200,000 characters, ~400 KB as UTF-16, under Android's ~1 MB transaction limit), keeping
   the newest text, with a notice. Bar Paste and key-row Paste share `clipboardText`; the key
   row still pastes into the draft only while the message box has focus.
-- **Pins and seen** (`Seen.kt` in `protocol/`: `Seen`, `SeenTracker`, `Pins`, `Looking`, `Alerting`; `docs/labels.md`
-  at the repo root is the contract): labels `herdr.seen=<turn>` and `herdr.pinned=1` (unpin writes it empty) are
-  written with `terminal.label`, the same call for local and remote (`mac/t7`) terminals. Shown state: blocked/error/
-  working as reported, else done when `turn > seen`, else idle; no label keeps the reported state. `seen` is written
-  only for panes really drawn with the app in front (`Looking.panes`; `Workspace` passes the layout mode), once per
-  turn (the decision is taken the first time a turn is on screen, so a later "mark unread" is not overruled), only
-  to raise it or when missing; leaving the screen forgets the decision. Our own writes show at once
-  (`SeenTracker.seen`) until the core's label changes. Mark unread writes `turn - 1`, never at turn 0. Menu: long-press;
-  swipe right reveals Pin and Read/Unread; nothing on a left swipe (it only closes an open row). Alerts say "done" when
-  the turn rose or the agent was working (`Alerting`), so a mark unread elsewhere is not news. Rejected: marking the
-  whole tab seen (the old bug), and rewriting seen on every update.
+- **Pins and seen** (`Seen.kt` in `protocol/`: `Seen`, `SeenTracker`, `LabelQueue`, `Pins`, `Looking`, `Alerting`;
+  `docs/labels.md` at the repo root is the contract): labels `herdr.seen=<turn>` and `herdr.pinned=1` (unpin writes it
+  empty) go through `terminal.label`, the same call for local and remote (`mac/t7`) terminals. Shown state: blocked/
+  error/working as reported, else done when `turn > seen`, else idle; no label keeps the reported state.
+  - *Looking* (`Looking.panes`, inputs from `Workspace`, `Session.attended`, `Session.appLocked`): app in front, screen
+    on and past the keyguard (`MainActivity` onResume/onPause and a screen receiver), no app lock (set before
+    `setForeground(true)` on start), and the pane really drawn: a stack's active child only, the zoomed pane alone (a mod
+    pane means nobody), folded with several panes the one drawn, not the agents home, not the open folded drawer, not
+    settings/Files/saved commands over it; a peek counts alone unless a panel is over it. Going away clears `visible`.
+  - *Writing seen*: once per turn, decided the first time a turn is on screen (a later "mark unread" is not overruled),
+    only to raise it or when missing; leaving forgets the decision (also while disconnected: the bookkeeping runs without
+    a link). Our own write shows at once until the core's label changes. A failed raise is not retried for 30 s (no flicker).
+  - *Mark unread* writes `turn - 1` (never at turn 0) and is held: not raised again for that turn until the terminal has
+    been on screen after the mark, then off screen, then on screen again (the menu lives in the drawer / agents home, so
+    closing it is not coming back). A new turn or Mark read ends the hold.
+  - *Writes* are serialised per terminal and label, latest wins (`LabelQueue`), so a raise then a mark cannot land
+    reversed, and a failure belongs to its own write. The tracker is reset when the host changes (addresses like `t1`
+    collide) and on disconnect; a lost link only drops writes in flight.
+  - *UI*: long-press menu; swipe right reveals Pin and Read/Unread (reset when the action count changes); nothing on a
+    left swipe (it only closes an open row). Without a link, pin and mark say "Not connected to the Mac".
+  - Alerts say "done" when the turn rose or the agent was working (`Alerting`), so a mark unread elsewhere is not news.
+  Rejected: marking the whole tab seen (the old bug), and rewriting seen on every update.
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 

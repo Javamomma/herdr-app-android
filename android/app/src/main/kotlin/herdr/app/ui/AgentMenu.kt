@@ -65,9 +65,9 @@ private val ACTION_WIDTH = 76.dp
 fun SwipeReveal(session: Session, a: Agent, background: Color, inset: Dp = 0.dp, content: @Composable () -> Unit) {
     val count = if (a.mark == Mark.NONE) 1 else 2
     val full = with(LocalDensity.current) { (ACTION_WIDTH * count).toPx() }
-    val x = remember { Animatable(0f) }
+    val x = remember(count) { Animatable(0f) }
     val scope = rememberCoroutineScope()
-    var open by remember { mutableStateOf(false) }
+    var open by remember(count) { mutableStateOf(false) }
     fun settle(to: Boolean) { open = to; scope.launch { x.animateTo(if (to) full else 0f) } }
     Box(Modifier.fillMaxWidth()) {
         if (x.value > 0f) Row(Modifier.matchParentSize().padding(vertical = inset)) {

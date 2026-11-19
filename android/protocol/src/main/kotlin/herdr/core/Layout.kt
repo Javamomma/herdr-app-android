@@ -83,6 +83,13 @@ fun JsonObject.find(id: String): JsonObject? = walk().firstOrNull { it.nodeId ==
 
 fun JsonObject.panes(): List<JsonObject> = walk().filter { it.isPane }
 
+/** The panes a tab really draws: every child of a row or column, but only the active child of a stack. */
+fun JsonObject.drawnPanes(): List<JsonObject> = when {
+    isPane -> listOf(this)
+    type == "stack" -> activeChild()?.drawnPanes().orEmpty()
+    else -> children.flatMap { it.drawnPanes() }
+}
+
 fun JsonObject.parentOf(id: String): JsonObject? = walk().firstOrNull { p -> p.children.any { it.nodeId == id } }
 
 /** The shown child of a stack: its `active`, else the first. */

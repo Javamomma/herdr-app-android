@@ -103,12 +103,20 @@ class SeenTest {
         assertEquals(listOf("t1" to 6L), t.raises(on, terms(6, 5)))
     }
 
-    @Test fun statusEventBeforeTurnEventWritesNothingEarly() {
+    @Test fun statusThenTurnEvent() {
         val t = SeenTracker()
-        t.raises(on, terms(5, 5))
-        // status event: turn still 5; then the turn event
+        // Looking at an agent at turn 5, seen 5; it was working.
         assertEquals(emptyList(), t.raises(on, terms(5, 5)))
+        // The status event says "done" first: the turn is still 5, display is idle, nothing is written.
+        assertEquals("idle", Seen.display("done", 5, t.seen("t1", 5)))
+        assertEquals(emptyList(), t.raises(on, terms(5, 5)))
+        // Then the turn event: 6, the label 5. Raised once.
         assertEquals(listOf("t1" to 6L), t.raises(on, terms(6, 5)))
+        assertEquals(emptyList(), t.raises(on, terms(6, 5)))
+        // Off screen, the same pair shows "done" and writes nothing.
+        val away = SeenTracker()
+        assertEquals(emptyList(), away.raises(emptySet(), emptyMap()))
+        assertEquals("done", Seen.display("done", 6, away.seen("t1", 5)))
     }
 
     @Test fun markReadAndUnreadFromTheMenuAwayFromTheScreen() {
@@ -120,10 +128,13 @@ class SeenTest {
 
     @Test fun failedWriteIsForgotten() {
         val t = SeenTracker()
-        t.raises(on, terms(5, 4))
-        t.failed("t1")
+        assertEquals(listOf("t1" to 5L), t.raises(on, terms(5, 4), now = 0))
+        t.failed("t1", 5, now = 0)
         assertEquals(4L, t.seen("t1", 4))
-        assertEquals(listOf("t1" to 5L), t.raises(on, terms(5, 4)))
+        // Not retried on every event, only after the backoff.
+        assertEquals(emptyList(), t.raises(on, terms(5, 4), now = 1_000))
+        assertEquals(emptyList(), t.raises(on, terms(5, 4), now = SeenTracker.RETRY_MS - 1))
+        assertEquals(listOf("t1" to 5L), t.raises(on, terms(5, 4), now = SeenTracker.RETRY_MS))
     }
 
     @Test fun doneIsNews() {
@@ -132,5 +143,135 @@ class SeenTest {
         assertTrue(!Alerting.doneIsNews("idle", 5, "done", 5)) // mark unread elsewhere
         assertTrue(!Alerting.doneIsNews("done", 5, "done", 6))
         assertTrue(!Alerting.doneIsNews(null, null, "done", 5)) // first sight
+    }
+
+    @Test fun failureOfAnOlderWriteDoesNotWipeANewerMark() {
+        val t = SeenTracker()
+        assertEquals(listOf("t1" to 5L), t.raises(on, terms(5, 4)))
+        assertEquals(4L, t.mark("t1", Mark.UNREAD, 5, 4, looking = true))
+        t.failed("t1", 5) // the raise's failure arrives late
+        assertEquals(4L, t.seen("t1", 4)) // the mark still shows
+        assertEquals(emptyList(), t.raises(on, terms(5, 4), now = 1_000_000))
+    }
+
+    @Test fun failedMarkIsNotRetriedAndDropsItsOverlay() {
+        val t = SeenTracker()
+        t.raises(on, terms(5, 5))
+        t.mark("t1", Mark.UNREAD, 5, 5, looking = true)
+        t.failed("t1", 4, now = 0)
+        assertEquals(5L, t.seen("t1", 5))
+        assertEquals(emptyList(), t.raises(on, terms(5, 5), now = 1_000_000))
+    }
+
+    @Test fun markedUnreadIsHeldUntilItLeavesAndComesBack() {
+        val t = SeenTracker()
+        // Folded: the menu is in the drawer, so nothing is looked at when the mark is made.
+        assertEquals(4L, t.mark("t1", Mark.UNREAD, 5, 5, looking = false))
+        // The drawer closes: on screen again after the mark. Not raised.
+        assertEquals(emptyList(), t.raises(on, terms(5, 4)))
+        assertEquals(emptyList(), t.raises(on, terms(5, 4)))
+        // Leaves, comes back: raised.
+        assertEquals(emptyList(), t.raises(emptySet(), emptyMap()))
+        assertEquals(listOf("t1" to 5L), t.raises(on, terms(5, 4)))
+    }
+
+    @Test fun markedUnreadWhileOnScreenNeedsOneLeaveAndReturn() {
+        val t = SeenTracker()
+        t.mark("t1", Mark.UNREAD, 5, 5, looking = true)
+        assertEquals(emptyList(), t.raises(on, terms(5, 4)))
+        t.raises(emptySet(), emptyMap())
+        assertEquals(listOf("t1" to 5L), t.raises(on, terms(5, 4)))
+    }
+
+    @Test fun heldMarkEndsWithANewTurnOrMarkRead() {
+        val t = SeenTracker()
+        t.mark("t1", Mark.UNREAD, 5, 5, looking = true)
+        assertEquals(listOf("t1" to 6L), t.raises(on, terms(6, 4)))
+        val u = SeenTracker()
+        u.mark("t1", Mark.UNREAD, 5, 5, looking = true)
+        u.mark("t1", Mark.READ, 5, 4, looking = true)
+        u.raises(emptySet(), emptyMap())
+        assertEquals(emptyList(), u.raises(on, terms(5, 5)))
+    }
+
+    @Test fun retainAndStopLooking() {
+        val t = SeenTracker()
+        t.raises(on, terms(5, 4))
+        t.retain(emptySet())
+        assertEquals(4L, t.seen("t1", 4)) // pending gone
+        val u = SeenTracker()
+        u.raises(on, terms(5, 5))
+        u.mark("t1", Mark.UNREAD, 5, 5, looking = true)
+        u.stopLooking() // background, screen off, lock
+        assertEquals(listOf("t1" to 5L), u.raises(on, terms(5, 4)))
+    }
+
+    @Test fun bookkeepingRunsWithoutALink() {
+        val t = SeenTracker()
+        t.raises(on, terms(5, 5))
+        t.mark("t1", Mark.UNREAD, 5, 5, looking = true)
+        // Disconnected: leaving is still noticed, and nothing is written or decided.
+        assertEquals(emptyList(), t.raises(emptySet(), emptyMap(), canWrite = false))
+        assertEquals(emptyList(), t.raises(on, terms(7, 4), canWrite = false))
+        assertEquals(listOf("t1" to 7L), t.raises(on, terms(7, 4)))
+    }
+
+    @Test fun resetForgetsEverythingForAnotherHost() {
+        val t = SeenTracker()
+        t.raises(on, terms(5, 4))
+        t.mark("t1", Mark.UNREAD, 5, 5, looking = true)
+        t.reset()
+        assertEquals(9L, t.seen("t1", 9))
+        assertEquals(listOf("t1" to 5L), t.raises(on, terms(5, 4)))
+    }
+
+    @Test fun connectionLostDropsWhatWasInFlight() {
+        val t = SeenTracker()
+        t.raises(on, terms(5, 4))
+        t.connectionLost()
+        assertEquals(4L, t.seen("t1", 4))
+    }
+
+    // ---- the write queue ----
+
+    @Test fun queueIsLatestWinsAndInOrder() {
+        val q = LabelQueue()
+        val first = q.submit("t1", Labels.SEEN, "5")!!
+        assertNull(q.submit("t1", Labels.SEEN, "4")) // the mark waits for the raise
+        assertNull(q.submit("t1", Labels.SEEN, "3"))
+        val next = q.done(first, ok = true).next!!
+        assertEquals("3", next.value)
+        val end = q.done(next, ok = true)
+        assertNull(end.next)
+        assertNull(end.failed)
+        assertTrue(q.submit("t1", Labels.SEEN, "6") != null)
+    }
+
+    @Test fun queueKeepsLabelsAndTerminalsApart() {
+        val q = LabelQueue()
+        assertTrue(q.submit("t1", Labels.SEEN, "5") != null)
+        assertTrue(q.submit("t1", Labels.PINNED, "1") != null)
+        assertTrue(q.submit("t2", Labels.SEEN, "5") != null)
+    }
+
+    @Test fun queueFailureBelongsToTheLastWrite() {
+        val q = LabelQueue()
+        val first = q.submit("t1", Labels.SEEN, "5")!!
+        q.submit("t1", Labels.SEEN, "4")
+        val second = q.done(first, ok = false) // the raise failed, but a newer mark is wanted
+        assertNull(second.failed)
+        assertEquals("4", second.next!!.value)
+        assertEquals("4", q.done(second.next!!, ok = false).failed)
+    }
+
+    @Test fun queueIgnoresResultsFromBeforeAReset() {
+        val q = LabelQueue()
+        val old = q.submit("t1", Labels.SEEN, "5")!!
+        q.reset()
+        val fresh = q.submit("t1", Labels.SEEN, "7")!!
+        val r = q.done(old, ok = false)
+        assertNull(r.next)
+        assertNull(r.failed)
+        assertEquals("7", fresh.value)
     }
 }
