@@ -230,6 +230,8 @@ class Session(private val context: Context) {
         private set
 
     init {
+        // An older build could save the Mac password; this one never does.
+        runCatching { secrets.put(herdr.core.Login.OLD_PASSWORD_SECRET, null) }
         runCatching {
             val saved = json.parseToJsonElement(viewPrefs.getString("tabs", "{}")!!).jsonObject
             for ((k, v) in saved) v.str?.let { activeTab[k] = it }
@@ -296,9 +298,8 @@ class Session(private val context: Context) {
         settings.edit().putString("snippets", kotlinx.serialization.json.JsonArray(list.map { obj("name" to it.name, "command" to it.command, "newTab" to it.newTab) }).toString()).apply()
     }
 
-    fun saveProfile(p: Profile, password: String?) {
+    fun saveProfile(p: Profile) {
         p.save(context)
-        if (password != null) secrets.put("password", password.ifEmpty { null })
         profile = p
     }
 
@@ -316,7 +317,7 @@ class Session(private val context: Context) {
         main.launch {
             try {
                 val client = withContext(Dispatchers.IO) {
-                    val link = SshLink.open(p, known, deviceKey, secrets.get("password"), acceptFingerprint)
+                    val link = SshLink.open(p, known, deviceKey, acceptFingerprint)
                     withContext(Dispatchers.Main) { if (mine == connecting) conn = Conn.Connecting("Starting hc connect on the Mac…") }
                     try {
                         CoreClient.connect(link.input, link.output) { link.close() }
@@ -446,11 +447,7 @@ class Session(private val context: Context) {
         var c: Throwable? = e
         while (c != null) {
             when (c) {
-                is UserAuthException -> return if (profile.auth == "password") {
-                    "The Mac refused the password for ${profile.user}."
-                } else {
-                    "The Mac refused this phone's key. Add it to ~/.ssh/authorized_keys on the Mac (Settings → Copy public key), or use a password."
-                }
+                is UserAuthException -> return "The Mac refused this phone's key. Add the phone's public key (Copy key, on the connect screen or in Settings) as one line in ~/.ssh/authorized_keys on the Mac, and check that Remote Login allows ${profile.user}."
                 is UnknownHostException -> return "Can't find ${profile.host}. On another network, use the Mac's Tailscale name or IP."
                 is ConnectException, is NoRouteToHostException -> return "Can't reach ${profile.host}:${profile.port}. Is the Mac awake, with Remote Login turned on (System Settings → General → Sharing)?"
                 is SocketTimeoutException -> return "${profile.host} didn't answer in time."

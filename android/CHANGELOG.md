@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### New
+- Sign-in is by this phone's key only: the Password option is gone, a password saved by an older version is deleted, and a saved password profile now uses the key.
+- Release builds are signed with a private key and refuse to build without it (the app is not yet released this way).
 - The left panel can be hidden at every width with one tap, and Back hides it. Folded, it opens with the button (swiping from the edge is off, so sideways drags stay with the terminal).
 - Paste sits beside Esc and goes to the box you are typing in; it says "Nothing to paste" when the clipboard has no text.
 - Unnamed tabs show their agent's title, else their number.

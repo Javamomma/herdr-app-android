@@ -16,7 +16,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * Secrets at rest (this device's SSH key, a saved password), encrypted with
+ * Secrets at rest (this device's SSH key), encrypted with
  * an AES key that never leaves the Android Keystore.
  */
 class Secrets(context: Context) {

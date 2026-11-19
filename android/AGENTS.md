@@ -90,6 +90,13 @@ From the 2026-11-12 repair build. Read before changing these paths.
   (200,000 characters, ~400 KB as UTF-16, under Android's ~1 MB transaction limit), keeping
   the newest text, with a notice. Bar Paste and key-row Paste share `clipboardText`; the key
   row still pastes into the draft only while the message box has focus.
+- **Signing and login** (2026-11): `app/debug.keystore` is public, so a debug-signed APK is
+  not trusted with the phone's SSH key. Release builds fail (`requireReleaseKey` in
+  `app/build.gradle.kts`) without `HERDR_KEYSTORE` and its password; there is no debug-key
+  fallback. CI builds the release APK only where secrets exist and checks its certificate
+  against the fingerprint in `RELEASING.md`. Login is by the phone's key only: no password
+  field or stored password (`Login` in `protocol/`; the old `"password"` secret is deleted at
+  start, a saved `"password"` auth reads as key). Debug builds still use `debug.keystore`.
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 

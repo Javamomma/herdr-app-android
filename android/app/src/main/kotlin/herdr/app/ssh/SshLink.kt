@@ -15,7 +15,7 @@ data class Profile(
     val host: String = "",
     val port: Int = 22,
     val user: String = "",
-    /** `key`: this phone's own key; `password`: the Mac account's password. */
+    /** Always `key` (this phone's own key); see `herdr.core.Login`. */
     val auth: String = "key",
     /**
      * Run on the Mac. sshd starts it through the account's shell without a
@@ -35,7 +35,7 @@ data class Profile(
                 host = p.getString("host", "") ?: "",
                 port = p.getInt("port", 22),
                 user = p.getString("user", "") ?: "",
-                auth = p.getString("auth", "key") ?: "key",
+                auth = herdr.core.Login.auth(p.getString("auth", null)),
                 command = p.getString("command", DEFAULT_COMMAND)?.ifBlank { DEFAULT_COMMAND } ?: DEFAULT_COMMAND,
             )
         }
@@ -82,7 +82,7 @@ class SshLink private constructor(private val client: SSHClient, private val ses
          * Connects and starts the command. [accept] is the fingerprint the
          * person just confirmed for an unknown or changed host key.
          */
-        fun open(profile: Profile, known: KnownHosts, key: DeviceKey, password: String?, accept: String?): SshLink {
+        fun open(profile: Profile, known: KnownHosts, key: DeviceKey, accept: String?): SshLink {
             val client = SSHClient(DefaultConfig())
             client.connectTimeout = 15_000
             client.timeout = 0
@@ -103,11 +103,7 @@ class SshLink private constructor(private val client: SSHClient, private val ses
             try {
                 client.connect(profile.host.trim(), profile.port)
                 client.connection.keepAlive.keepAliveInterval = 15
-                if (profile.auth == "password") {
-                    client.authPassword(profile.user.trim(), (password ?: "").toCharArray())
-                } else {
-                    client.authPublickey(profile.user.trim(), client.loadKeys(key.privateKey(), null, null))
-                }
+                client.authPublickey(profile.user.trim(), client.loadKeys(key.privateKey(), null, null))
                 val session = client.startSession()
                 // No PTY: the connection carries a byte protocol, not a terminal session.
                 val cmd = session.exec(profile.command)

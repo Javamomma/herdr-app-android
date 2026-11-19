@@ -17,8 +17,9 @@ android {
         versionName = "0.2.0"
     }
 
-    // Releases are signed with one key kept as repository secrets (RELEASING.md),
-    // so every release installs over the last. Without it, the debug key.
+    // Release builds are signed with the private release key (RELEASING.md): the
+    // file named by HERDR_KEYSTORE and its password. There is no fallback to the
+    // debug key; a release build without them fails (see requireReleaseKey).
     val keystore = System.getenv("HERDR_KEYSTORE")
     signingConfigs {
         // One shared debug key (committed, as is usual: it signs only test
@@ -43,7 +44,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
@@ -62,6 +63,26 @@ android {
             "META-INF/{AL2.0,LGPL2.1}",
         )
     }
+}
+
+// Fails only when a release variant is actually built; configuring the project,
+// tests and assembleDebug need no secrets.
+val requireReleaseKey = tasks.register("requireReleaseKey") {
+    doLast {
+        val file = System.getenv("HERDR_KEYSTORE")
+        val pass = System.getenv("HERDR_KEYSTORE_PASSWORD")
+        if (file.isNullOrBlank() || pass.isNullOrBlank()) {
+            throw GradleException(
+                "Release builds are signed with the private release key. Set HERDR_KEYSTORE (path to the keystore file), " +
+                    "HERDR_KEYSTORE_PASSWORD and optionally HERDR_KEY_ALIAS (default herdr). See android/RELEASING.md. " +
+                    "There is no fallback to the debug key.",
+            )
+        }
+        if (!file(file).isFile) throw GradleException("HERDR_KEYSTORE points to a file that does not exist.")
+    }
+}
+tasks.configureEach {
+    if (name == "preReleaseBuild" || name == "validateSigningRelease") dependsOn(requireReleaseKey)
 }
 
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
