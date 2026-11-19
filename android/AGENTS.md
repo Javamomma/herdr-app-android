@@ -173,6 +173,14 @@ From the 2026-11-12 repair build. Read before changing these paths.
   (`AgentTree.expanded`), else folded with "N helpers"; the person's choice is per parent in memory only (`Session.helpersOpen`). Menu and swipe are
   the same rows. Rejected: matching space or tab names (they are shown, not searched), saving fold state, and swiping the pane title bar for
   the next pane (not added: it cannot be checked without the phone and risks the terminal's sideways drags).
+  Review fixes: a blocked or error helper is always shown whatever fold was chosen (done-unread may stay folded; the folded header says
+  "2 helpers · 1 done"); `helpersOpen` and `stackShown` are cleared with the seen tracker (disconnect, new host, demo). A jump drops a zoom on another
+  pane and, for a hidden stack child, sets `Session.stackShown` (this phone's own choice, read by `activeChild`/`drawnPanes`, never written to the
+  layout document: the app has no stack switcher that writes it). Find closes when its panel is not shown (no Back swallowed, focus cleared), refuses
+  a terminal that closed meanwhile (notice), needs a non-blank query for Enter, and is computed only while composed from one terminal-to-place index
+  (`placeIndex`, rebuilt on layout change) and `derivedStateOf`. `parent` for a remote helper is unverified against a real remote core (no machine
+  here, `hc rpc` absent): `AgentTree.resolveParent` tries `machine/parent` first, then the value as given. A parent chain through a plain terminal
+  goes to the nearest agent (`AgentTree.nearestAgent`).
 - **Reading** (`Reading`, `Chunks`, `Reply` in `protocol/Reading.kt`, `ui/Reader.kt`, `ui/Panels.kt`, `Session.readFile`): `file.read` takes
   `offset` and `limit` in **lines** (we ask for 20,000) and the core also stops at 8 MB of whole lines; the reply has `first`, `last`, `lines`,
   so "cut" is `last < lines` and "Load more" is one more read at `offset = last + 1`, appended (if it does not follow on, the file changed and it
@@ -190,17 +198,6 @@ From the 2026-11-12 repair build. Read before changing these paths.
   "Show all" when it left text out, when the card clips it, or when the reply is 600 characters or more. The sheet (`session.replyOpen`) never
   attaches or shows a terminal, so it is not "looking" and never takes control. A later build could read the full reply from the agent's
   transcript (label `claude.transcript` names the file) with `file.read`: not done here, by decision.
-||||||| 4788364
-  share (`ACTION_SEND`, image type, one image): read through the content URI, no permission, no broad storage. Shrink: longest side 2000 px
-  (never enlarged), upright by EXIF, re-encoded (drops location); JPEG at 85, then 70 and 55 if over the cap; a PNG source stays PNG unless
-  it is over 1.5 MB and 3x the JPEG (or over the cap; alpha is drawn on white then). Cap 5 MB after shrinking (the core's own is 8 MB). Name:
-  `photo-yyyyMMdd-HHmmss.jpg|png`, never the original. The path goes into the draft with `AttachPath.insert` (like Paste, `Clip.insertAt`): a
-  space before it unless at the start or after white space; quoted in single quotes (`'` as `'\''`) unless it only has letters, digits and
-  `_ @ % + = : , . / ~ -`; a path with a line break is refused. Timeout 20 s plus 1 s per 50 KB, at most 3 min; cancel interrupts the wait
-  (a file may still have arrived: harmless). A failure only shows a notice; the draft is untouched. It never takes control while watching:
-  it is a core call and a draft edit. A share arriving locked waits (the chooser is drawn only inside the unlocked app); not connected: notice
-  and the picture is dropped; the chooser preselects the last agent opened (`Session.lastAgent`), else the one in view, else the first. The temp
-  file in `cache/attach` is deleted after every upload and at start. Rejected: sending the picture on, writing it through `machine.exec`.
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 

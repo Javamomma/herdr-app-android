@@ -46,6 +46,30 @@ class FindTest {
         assertEquals("no tab", Find.where("", " "))
     }
 
+    @Test fun multiWordRankingSumsEachWordsBestField() {
+        val both = item("both", name = "claude", title = "fix nav")            // 5 + 3
+        val onlyTitle = item("title", name = "x", title = "claude fix nav")     // 3 + 3
+        val folderToo = item("folder", name = "x", title = "fix", folder = "/src/claude/nav") // 3 + 2 (nav in folder)
+        val miss = item("miss", name = "claude", title = "other")
+        assertEquals(listOf("both", "title"), Find.search("claude nav", listOf(folderToo, onlyTitle, miss, both)).map { it.address }.take(2))
+        assertEquals(listOf("both", "title"), Find.search("claude fix", listOf(onlyTitle, both, miss)).map { it.address })
+        assertTrue("miss" !in Find.search("claude nav", listOf(miss)).map { it.address })
+    }
+
+    @Test fun spaceAndTabNamesAreShownNotSearched() {
+        val a = item("a", name = "zsh", space = "website", tab = "deploy")
+        assertTrue(Find.search("website", listOf(a)).isEmpty())
+        assertTrue(Find.search("deploy", listOf(a)).isEmpty())
+        assertEquals("website › deploy", Find.where(a))
+    }
+
+    @Test fun blankFieldsNeverCrashOrMatchEverything() {
+        val blank = FindItem("t1", "", "", "", "")
+        assertTrue(Find.search("x", listOf(blank)).isEmpty())
+        assertEquals(listOf("t1"), Find.search("", listOf(blank)).map { it.address })
+        assertEquals("no tab", Find.where(blank))
+    }
+
     @Test fun termsSplitAndLowercase() {
         assertEquals(listOf("a", "b"), Find.terms(" A\tB\n"))
         assertFalse(Find.terms("").isNotEmpty())
@@ -108,9 +132,56 @@ class AgentTreeTest {
     }
 
     @Test fun orderIsStable() {
-        val order = listOf("a", "b", "c", "d")
-        assertEquals(tree(order, mapOf("c" to "a")), tree(order, mapOf("c" to "a")))
-        assertEquals(listOf("a" to listOf("c"), "b" to emptyList(), "d" to emptyList()), tree(order, mapOf("c" to "a")))
+        val parents = mapOf("c" to "a", "d" to "a")
+        assertEquals(listOf("a" to listOf("c", "d"), "b" to emptyList()), tree(listOf("a", "b", "c", "d"), parents))
+        // Helpers keep the order given; the parent rises to its first helper.
+        assertEquals(listOf("a" to listOf("d", "c"), "b" to emptyList()), tree(listOf("d", "c", "b", "a"), parents))
+        assertEquals(listOf("x", "y", "z"), tree(listOf("x", "y", "z"), emptyMap()).map { it.first })
+    }
+
+    @Test fun pinnedRootWithUrgentHelperStaysInThePinnedRows() {
+        val t = tree(listOf("other", "p", "h"), mapOf("h" to "p"), pinned = setOf("p"))
+        assertEquals(listOf("other", "p"), t.map { it.first }) // given order: other is first here, p keeps its own place
+        val t2 = tree(listOf("p", "x", "h"), mapOf("h" to "p"), pinned = setOf("p"))
+        assertEquals(listOf("p" to listOf("h"), "x" to emptyList()), t2)
+    }
+
+    @Test fun pinnedHelperIsStillListedUnderItsUnpinnedParent() {
+        val t = tree(listOf("h", "p", "q"), mapOf("h" to "p"), pinned = setOf("h"))
+        assertEquals(listOf("p" to listOf("h"), "q" to emptyList()), t)
+    }
+
+    @Test fun chainThroughAPlainTerminalGoesUnderTheAgent() {
+        // g -> shell -> p, where shell is not an agent.
+        val parents = mapOf("g" to "shell", "shell" to "p")
+        val agents = setOf("g", "p")
+        fun up(a: String) = AgentTree.nearestAgent(parents[a], { it in agents }, { parents[it] })
+        assertEquals("p", up("g"))
+        assertEquals(null, up("p"))
+        val t = AgentTree.build(listOf("g", "p"), { up(it) }).map { it.root to it.helpers }
+        assertEquals(listOf("p" to listOf("g")), t)
+        // Loops and dead ends through plain terminals end in none.
+        assertEquals(null, AgentTree.nearestAgent("s1", { false }, { if (it == "s1") "s2" else "s1" }))
+        assertEquals(null, AgentTree.nearestAgent("gone", { false }, { null }))
+        assertEquals(null, AgentTree.nearestAgent("", { true }, { null }))
+    }
+
+    @Test fun machineLocalParentIsResolvedOnTheHelpersMachine() {
+        val live = setOf("t7", "vps/t7", "vps/t9", "vps/t8")
+        val exists = { a: String -> a in live }
+        // `parent` unverified against a real remote core: both spellings work.
+        assertEquals("vps/t7", AgentTree.resolveParent("vps/t9", "t7", exists))      // machine-local: not the local t7
+        assertEquals("vps/t7", AgentTree.resolveParent("vps/t9", "vps/t7", exists))   // already qualified
+        assertEquals("t7", AgentTree.resolveParent("t9", "t7", exists))               // local helper
+        assertEquals("t5", AgentTree.resolveParent("vps/t9", "t5", exists))           // no such one on its machine: as given
+        assertEquals(null, AgentTree.resolveParent("vps/t9", " ", exists))
+        assertEquals(null, AgentTree.resolveParent("vps/t9", null, exists))
+    }
+
+    @Test fun summaryNamesWhatWaitsWhenFolded() {
+        assertEquals("2 helpers · 1 done", AgentTree.summary(listOf("working", "done"), open = false))
+        assertEquals("2 helpers", AgentTree.summary(listOf("working", "done"), open = true))
+        assertEquals("1 helper", AgentTree.summary(listOf("idle"), open = false))
     }
 
     @Test fun expandedRuleAndCountText() {
@@ -119,9 +190,37 @@ class AgentTreeTest {
         assertTrue(AgentTree.expanded(null, listOf("done")))
         assertFalse(AgentTree.expanded(null, listOf("working", "idle")))
         assertFalse(AgentTree.expanded(null, emptyList()))
-        assertFalse(AgentTree.expanded(false, listOf("blocked")))
+        // A fold chosen earlier never hides a helper that is blocked or in error.
+        assertTrue(AgentTree.expanded(false, listOf("blocked")))
+        assertTrue(AgentTree.expanded(false, listOf("idle", "error")))
+        // Done-unread may stay folded when the person folded it (the folded header says so); unfolded stays open.
+        assertFalse(AgentTree.expanded(false, listOf("done")))
         assertTrue(AgentTree.expanded(true, listOf("idle")))
         assertEquals("1 helper", AgentTree.countText(1))
         assertEquals("3 helpers", AgentTree.countText(3))
+    }
+}
+
+class StackJumpTest {
+    private fun doc(): kotlinx.serialization.json.JsonObject {
+        val stack = container("st", Axis.Row, listOf(terminalPane("p2", "t2"), terminalPane("p3", "t3"))).let {
+            it.with("type" to kotlinx.serialization.json.JsonPrimitive("stack"), "active" to kotlinx.serialization.json.JsonPrimitive("p2"))
+        }
+        return container("root", Axis.Row, listOf(terminalPane("p1", "t1"), stack))
+    }
+
+    @Test fun jumpToAHiddenStackChildShowsIt() {
+        val root = doc()
+        assertEquals(listOf("p1", "p2"), root.drawnPanes().map { it.nodeId })
+        val shown = root.stackPath("p3")
+        assertEquals(mapOf("st" to "p3"), shown)
+        assertEquals(listOf("p1", "p3"), root.drawnPanes(shown).map { it.nodeId })
+        assertEquals("p3", root.find("st")!!.activeChild(shown)!!.nodeId)
+        assertEquals("p2", root.find("st")!!.activeChild()!!.nodeId) // the document itself is untouched
+    }
+
+    @Test fun visiblePaneAndMissingPaneNeedNoOverride() {
+        assertEquals(emptyMap(), doc().stackPath("p1"))
+        assertEquals(emptyMap(), doc().stackPath("nope"))
     }
 }
