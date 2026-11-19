@@ -62,7 +62,10 @@ class WatchTest {
         val painted = CountDownLatch(1)
         val listener = object : StreamListener {
             override fun onResize(cols: Int, rows: Int) { synchronized(order) { order.add("size ${cols}x$rows") } }
-            override fun onData(bytes: ByteArray) { synchronized(order) { if (order.none { it == "paint" }) order.add("paint") }; painted.countDown() }
+            override fun onData(bytes: ByteArray) {
+                synchronized(order) { if (order.none { it == "paint" }) order.add("paint") else if (bytes.decodeToString().contains("hello")) order.add("echo") }
+                painted.countDown()
+            }
             override fun onClosed(reason: JsonElement) {}
             override fun onLost() {}
         }
@@ -71,6 +74,9 @@ class WatchTest {
         assertTrue(painted.await(5, TimeUnit.SECONDS))
         assertEquals(listOf("size 100x30", "paint"), synchronized(order) { order.toList() }, "the Mac's size, then the screen")
         assertTrue(demo.typingSizes.isEmpty(), "an observer does not resize the terminal")
+        // Now the observer tries: typing and a size on its channel. The core ignores both.
+        core.input(watched.channel, "hello\r".toByteArray())
+        core.resize(watched.channel, 10, 5)
 
         val typing = core.attach("t1", 40, 12, obj(), object : StreamListener {
             override fun onData(bytes: ByteArray) {}
@@ -78,7 +84,9 @@ class WatchTest {
             override fun onLost() {}
         })
         assertFalse(typing.observing)
-        assertEquals(listOf(40 to 12), demo.typingSizes, "a typing viewer's size counts")
+        // Frames are handled in order: the attach reply came after the observer's frames, so they are done.
+        assertEquals(listOf(40 to 12), demo.typingSizes, "a typing viewer's size counts; the observer's 10x5 did not")
+        assertFalse(synchronized(order) { order.any { it == "echo" } }, "the observer's typing was not echoed back")
         core.close()
     }
 

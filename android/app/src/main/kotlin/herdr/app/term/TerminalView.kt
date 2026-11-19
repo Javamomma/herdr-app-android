@@ -374,6 +374,9 @@ class TerminalView(context: Context, private val term: TerminalController) : Vie
         }
 
         override fun onScale(detector: ScaleGestureDetector): Boolean {
+            // A watched grid is scaled to fit: pinching would change nothing on screen but the saved font
+            // (and the phone's grid once typing takes control). Tap to type first.
+            if (term.watching) return true
             start *= detector.scaleFactor
             val px = start.roundToInt().coerceIn(7, 32)
             if (px != term.fontPx) term.onPinch(px)
