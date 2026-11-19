@@ -4,6 +4,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -37,8 +40,8 @@ fun AttachProgress(session: Session, address: String) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Theme.accent)
-        Text("Uploading photo…", color = Theme.text, fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp).weight(1f))
-        TextButton(onClick = { session.cancelAttach() }) { Text("Cancel upload") }
+        Text(if (session.attachCancelling) "Stopping the upload…" else "Uploading photo…", color = Theme.text, fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp).weight(1f))
+        if (!session.attachCancelling) TextButton(onClick = { session.cancelAttach() }) { Text("Cancel upload") }
     }
 }
 
@@ -50,13 +53,6 @@ fun AttachProgress(session: Session, address: String) {
 fun ShareChooser(session: Session) {
     val uri = session.sharedPhoto ?: return
     val connected = session.conn is Conn.Connected
-    val waiting = session.conn is Conn.Connecting
-    LaunchedEffect(uri, session.conn) {
-        if (!connected && !waiting) {
-            session.notice = Attach.Failure.NotConnected.notice
-            session.sharedPhoto = null
-        }
-    }
     if (!connected) return
     val agents = session.agents()
     if (agents.isEmpty()) {
@@ -69,7 +65,7 @@ fun ShareChooser(session: Session) {
         onDismissRequest = { session.sharedPhoto = null },
         title = { Text("Send photo to…") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 for (a in agents) {
                     Row(Modifier.fillMaxWidth().clickable { picked = a.address }, verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(selected = picked == a.address, onClick = { picked = a.address })
@@ -84,7 +80,7 @@ fun ShareChooser(session: Session) {
                 session.sharedPhoto = null
                 if (!session.canAttach) { session.notice = if (session.attaching != null) "Another photo is still uploading." else Attach.Failure.Unsupported.notice; return@TextButton }
                 agents.firstOrNull { it.address == to }?.let { session.showAgent(it) }
-                session.attachPhoto(uri, to) { path -> session.appendAttached(to, path) }
+                session.attachPhoto(uri, to) { path -> session.insertAttached(to, path) }
             }) { Text("Upload") }
         },
         dismissButton = { TextButton(onClick = { session.sharedPhoto = null }) { Text("Cancel") } },

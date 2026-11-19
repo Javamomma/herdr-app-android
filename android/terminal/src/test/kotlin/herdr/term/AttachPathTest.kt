@@ -34,6 +34,31 @@ class AttachPathTest {
     }
 
     @Test
+    fun any_control_character_is_refused() {
+        for (c in listOf('\u001b', '\u0007', '\t', '\u007f', '\u0085', '\u009b', '\u2028', '\u2029')) {
+            assertNull(AttachPath.quote("/tmp/a${c}b"), "refused: U+%04X".format(c.code))
+        }
+        assertEquals("'/tmp/caf\u00e9 \u65e5\u672c.png'", AttachPath.quote("/tmp/caf\u00e9 \u65e5\u672c.png"), "ordinary non-ASCII is fine")
+    }
+
+    @Test
+    fun a_path_over_the_length_cap_is_refused() {
+        val ok = "/" + "a".repeat(AttachPath.MAX_PATH - 1)
+        assertEquals(ok, AttachPath.quote(ok))
+        assertNull(AttachPath.quote(ok + "a"))
+        assertNull(AttachPath.insert("", 0, 0, ok + "a"))
+    }
+
+    @Test
+    fun a_space_follows_the_path_only_when_text_follows_without_one() {
+        assertEquals("see /tmp/a.png now" to 15, AttachPath.insert("seenow", 3, 3, "/tmp/a.png"))
+        assertEquals("/tmp/a.png word" to 11, AttachPath.insert("word", 0, 0, "/tmp/a.png"))
+        assertEquals("a /tmp/a.png\nnext" to 12, AttachPath.insert("a\nnext", 1, 1, "/tmp/a.png"), "a line break after: no extra space")
+        assertEquals("a /x.png" to 8, AttachPath.insert("a", 1, 1, "/x.png"), "none at the end of the text")
+        assertEquals("a /x.png b" to 8, AttachPath.insert("a b", 1, 1, "/x.png"), "white space after: no extra")
+    }
+
+    @Test
     fun insertion_goes_at_the_cursor_with_a_space_only_when_needed() {
         assertEquals("/tmp/a.png" to 10, AttachPath.insert("", 0, 0, "/tmp/a.png"))
         assertEquals("look at /tmp/a.png" to 18, AttachPath.insert("look at", 7, 7, "/tmp/a.png"))

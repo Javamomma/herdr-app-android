@@ -48,7 +48,8 @@ class MainActivity : FragmentActivity() {
             HerdrRoot(session, pool, locked = locked, onUnlock = ::unlock)
         }
         if (!handle(intent) && session.profile.ready) session.connect()
-        shared(intent)
+        // Not on a restore or a launch from recents: that intent is an old share.
+        if (savedInstanceState == null) shared(intent)
         Photos.sweep(this)
         if (Build.VERSION.SDK_INT >= 33 && session.alerts &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -86,10 +87,15 @@ class MainActivity : FragmentActivity() {
      */
     private fun shared(intent: Intent?) {
         if (intent?.action != Intent.ACTION_SEND || intent.type?.startsWith("image/") != true) return
-        @Suppress("DEPRECATION")
-        val uri = (if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) else intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
-        intent.action = null // a rotation or a later resume must not share it again
-        if (uri == null) { session.notice = "Nothing to attach: the other app sent no picture."; return }
+        // Relaunched from the recents list (or after the process died): the old share must not run again.
+        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
+        // Another app's extra can be anything: read it without a cast that can throw, and take only a content address.
+        val uri = try {
+            @Suppress("DEPRECATION")
+            intent.extras?.get(Intent.EXTRA_STREAM) as? Uri
+        } catch (_: Exception) { null }
+        intent.action = null // a later resume must not share it again
+        if (uri == null || !Attach.acceptableScheme(uri.scheme)) { session.notice = "Nothing to attach: the other app did not share a picture Herdr can read."; return }
         if (session.conn !is Conn.Connected && session.conn !is Conn.Connecting) {
             session.notice = Attach.Failure.NotConnected.notice
             return

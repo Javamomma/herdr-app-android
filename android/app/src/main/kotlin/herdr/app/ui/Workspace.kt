@@ -95,6 +95,7 @@ import herdr.app.Conn
 import herdr.app.Session
 import herdr.app.Theme
 import herdr.app.term.TerminalPool
+import herdr.core.Attach
 import herdr.core.Axis
 import herdr.core.LeftPanel
 import herdr.core.PanelToggle
@@ -466,6 +467,7 @@ fun Answers(session: Session, a: Agent, compact: Boolean) {
                 color = color, fontSize = if (compact) 12.sp else 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.border(1.dp, color.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
                     .combinedClickable(
+                        enabled = !Attach.blocksSend(session.attaching, a.address),
                         onClick = { if (c.risky || q.dangerous) session.notice = "Press and hold to choose \"${c.label}\"" else session.choose(a.address, c.label, q.mark, held = false) },
                         onLongClick = { session.choose(a.address, c.label, q.mark, held = true) },
                     )
@@ -820,7 +822,11 @@ fun KeyBar(session: Session, pool: TerminalPool) {
     // The message box's text and cursor live here so Paste can insert at the cursor.
     val draftText = address?.let { session.drafts[it] } ?: ""
     var typedField by remember(address) { mutableStateOf(TextFieldValue(draftText, TextRange(draftText.length))) }
-    val field = if (typedField.text == draftText) typedField else TextFieldValue(draftText, TextRange(draftText.length))
+    // After a change from outside (a photo's path), the session knows where the cursor goes.
+    val seen = address?.let { session.draftCursors[it] }?.takeIf { it.text == draftText }
+    val field = if (typedField.text == draftText) typedField
+        else if (seen != null) TextFieldValue(draftText, TextRange(seen.start, seen.end))
+        else TextFieldValue(draftText, TextRange(draftText.length))
     var boxFocused by remember(address) { mutableStateOf(false) }
     fun pasteIntoDraft(text: String) {
         val a = address ?: return
@@ -828,18 +834,10 @@ fun KeyBar(session: Session, pool: TerminalPool) {
         typedField = TextFieldValue(t, TextRange(pos))
         session.drafts[a] = t
     }
-    // A photo's path goes into the message box at the cursor (the box it was attached from), never to the terminal.
-    fun insertPath(a: String, path: String) {
-        if (a != address) { session.appendAttached(a, path); return }
-        val r = herdr.term.AttachPath.insert(field.text, field.selection.start, field.selection.end, path)
-        if (r == null) { session.notice = "That path cannot be added to a message."; return }
-        typedField = TextFieldValue(r.first, TextRange(r.second))
-        session.drafts[a] = r.first
-    }
-    val insertLatest by androidx.compose.runtime.rememberUpdatedState(::insertPath)
+    // A photo's path goes into that terminal's draft through the session, so it never rests on this composition.
     val picker = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()) { uri ->
         val a = address
-        if (uri != null && a != null) session.attachPhoto(uri, a) { path -> insertLatest(a, path) }
+        if (uri != null && a != null) session.attachPhoto(uri, a) { path -> session.insertAttached(a, path) }
     }
     LaunchedEffect(address, isAgent) { if (isAgent) session.noteOpened(address) }
     fun pasteFromClipboard(toDraft: Boolean) {
@@ -849,7 +847,10 @@ fun KeyBar(session: Session, pool: TerminalPool) {
     }
     if (composing && address != null) {
         Composer(
-            session, address, field, onField = { typedField = it; session.drafts[address] = it.text },
+            session, address, field, onField = {
+                typedField = it; session.drafts[address] = it.text
+                session.draftCursors[address] = Session.DraftCursor(it.text, it.selection.start, it.selection.end)
+            },
             onFocus = { boxFocused = it }, onPaste = { pasteFromClipboard(true) },
             onAttach = {
                 picker.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -929,7 +930,7 @@ private fun Composer(
             modifier = Modifier.padding(bottom = 4.dp).semantics { contentDescription = "Attach photo" },
         ) { Text("📎") }
         androidx.compose.material3.Button(
-            enabled = !sending,
+            enabled = !sending && !Attach.blocksSend(session.attaching, address),
             onClick = {
                 val sent = draft
                 val t = target()

@@ -14,10 +14,25 @@ import java.util.concurrent.CancellationException
 object Attach {
     /** The longest side of a sent picture, in pixels; smaller pictures are never enlarged. */
     const val MAX_SIDE = 2000
-    /** JPEG quality, 0..100: 85 first; if that is over [MAX_BYTES], 70 and then 55 are tried before refusing. */
-    val JPEG_QUALITIES = listOf(85, 70, 55)
-    /** What is sent at most (the picture after shrinking). The core's own limit is 8 MB; base64 adds a third on the wire. */
-    const val MAX_BYTES = 5 * 1024 * 1024
+    /** One try at making the picture fit: the longest side and the JPEG quality (0..100). */
+    data class Step(val side: Int, val quality: Int)
+
+    /** Tried in order until the picture fits [MAX_BYTES]; after the last one it is refused. */
+    val LADDER = listOf(Step(MAX_SIDE, 85), Step(MAX_SIDE, 70), Step(1600, 70), Step(1280, 70), Step(1280, 55))
+
+    /** The first of [LADDER] whose result is at most [MAX_BYTES] ([encode] gives the result and its size), else null. */
+    fun <T> fit(encode: (Step) -> Pair<T, Long>): T? {
+        for (step in LADDER) {
+            val (result, size) = encode(step)
+            if (size <= MAX_BYTES) return result
+        }
+        return null
+    }
+    /**
+     * What is sent at most (the picture after shrinking). The core's own limit is 8 MB, but the request is one frame
+     * on the connection's single writer, so keys and Send wait behind it: kept small (base64 adds a third).
+     */
+    const val MAX_BYTES = 2 * 1024 * 1024
     /** A PNG is kept unless it is bigger than this and at least [PNG_RATIO] times the JPEG. */
     const val PNG_KEEP_BYTES = 1_500_000
     const val PNG_RATIO = 3
@@ -56,8 +71,17 @@ object Attach {
     fun fileName(epochMs: Long, zone: ZoneId, format: Format): String =
         "photo-" + DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT).withZone(zone).format(Instant.ofEpochMilli(epochMs)) + "." + format.ext
 
-    /** How long to wait for the core: 20 s plus 1 s for every 50 KB (a slow link), at most 3 minutes. */
-    fun timeoutMs(bytes: Int): Long = (20_000L + bytes / 50L).coerceAtMost(180_000L)
+    /** What base64 makes of [bytes]. */
+    fun wireBytes(bytes: Int): Long = (bytes + 2L) / 3 * 4
+
+    /** How long to wait for the core: 20 s plus 1 s for every 50 KB on the wire (a slow link), at most 3 minutes. */
+    fun timeoutMs(bytes: Int): Long = (20_000L + wireBytes(bytes) / 50L).coerceAtMost(180_000L)
+
+    /** Whether Send and the answer buttons must wait: a photo is uploading to this terminal (its frame holds the writer). */
+    fun blocksSend(attaching: String?, address: String): Boolean = attaching != null && attaching == address
+
+    /** A shared picture is read only from a `content` address (another app's grant), never a file or anything else. */
+    fun acceptableScheme(scheme: String?): Boolean = scheme.equals("content", ignoreCase = true)
 
     /** The `terminal.put` parameters: the bytes go as base64 inside the JSON. */
     fun request(terminal: String, name: String, data: ByteArray) =
@@ -82,6 +106,7 @@ object Attach {
         object Unsupported : Failure("This herdr-core cannot take files yet: run `hc update` on the Mac.")
         object TooLarge : Failure("That photo is too large to send (over ${MAX_BYTES / (1024 * 1024)} MB even after shrinking).")
         object Unreadable : Failure("Could not read that picture.")
+        object Local : Failure("Could not prepare the photo on this phone (storage full or not readable). Nothing was sent.")
         object TimedOut : Failure("Timed out: the Mac did not answer. The photo may have arrived there, but nothing was added to your message.")
         object Lost : Failure("The connection dropped while uploading. Nothing was added to your message.")
         class Refused(why: String) : Failure("The Mac refused the photo: $why")
@@ -120,6 +145,8 @@ object Attach {
         if (core == null || core.closed) return Outcome.Failed(Failure.NotConnected)
         if (!supported(core)) return Outcome.Failed(Failure.Unsupported)
         if (data.size > MAX_BYTES) return Outcome.Failed(Failure.TooLarge)
+        // Cancelled while it was being prepared: nothing is queued.
+        if (Thread.currentThread().isInterrupted) throw InterruptedException()
         return try {
             val placed = parse(core.call("terminal.put", request(terminal, name, data), timeoutMs(data.size)))
                 ?: return Outcome.Failed(Failure.Refused("it gave no path."))
