@@ -99,4 +99,22 @@ class DemoCoreTest {
         )
         core.close()
     }
+
+    @Test
+    fun the_demo_files_show_the_cut_notice_load_more_and_the_binary_notice() {
+        val demo = DemoCore()
+        val core = CoreClient.connect(demo.clientInput, demo.clientOutput) { demo.close() }
+        try {
+            val first = FilePart.of(core.call("file.read", obj("path" to "/x/big.log", "offset" to 1, "limit" to Reading.LINE_LIMIT)))
+            assertEquals(1, first.first); assertEquals(20_000, first.last); assertEquals(25_000, first.lines)
+            val d = ReadDoc.of(first)
+            assertTrue(Reading.notice(d)!!.startsWith("Showing the first 20,000 of 25,000 lines"))
+            val next = FilePart.of(core.call("file.read", obj("path" to "/x/big.log", "offset" to Reading.nextOffset(d), "limit" to Reading.LINE_LIMIT)))
+            assertEquals(20_001, next.first)
+            val joined = (d.more(next) as ReadDoc.More.Joined).doc
+            assertNull(Reading.notice(joined))
+            val err = runCatching { core.call("file.read", obj("path" to "/x/image.bin")) }.exceptionOrNull() as RpcException
+            assertEquals(Reading.BINARY_NOTICE, Reading.errorText(err.kind, err.message))
+        } finally { demo.close() }
+    }
 }

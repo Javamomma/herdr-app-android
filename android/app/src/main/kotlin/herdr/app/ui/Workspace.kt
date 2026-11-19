@@ -216,7 +216,7 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         val pane = { n: JsonObject -> herdr.core.Looking.Pane(n.nodeId, n.terminal) }
         val looking = herdr.core.Looking.panes(herdr.core.Looking.Screen(
             foreground = session.foreground && session.attended, covered = session.appLocked,
-            dialogOver = settings || snippetsOpen, wide = wide, agentsHome = agentsHome, drawerOpen = drawerOpen,
+            dialogOver = herdr.core.Looking.dialogOver(settings, snippetsOpen, session.replyOpen != null), wide = wide, agentsHome = agentsHome, drawerOpen = drawerOpen,
             panelOver = panel != null && !wider,
             allPanes = tab?.root?.panes()?.map(pane).orEmpty(),
             drawn = tab?.root?.drawnPanes(session.stackShown)?.map(pane).orEmpty(),
@@ -227,7 +227,7 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         LaunchedEffect(looking) { session.visible = looking }
         // The queue refreshes only while its section is really drawn (never with the drawer shut, or under a dialog).
         val queueScreen = herdr.core.Looking.Screen(
-            foreground = true, covered = false, dialogOver = settings || snippetsOpen, wide = wide, agentsHome = agentsHome, drawerOpen = drawerOpen,
+            foreground = true, covered = false, dialogOver = herdr.core.Looking.dialogOver(settings, snippetsOpen, session.replyOpen != null), wide = wide, agentsHome = agentsHome, drawerOpen = drawerOpen,
             panelOver = panel != null && !wider, allPanes = emptyList(), drawn = emptyList(), zoomed = null, focused = null, peek = session.peek,
         )
         val otherDialog = dialog != null || session.closing != null
@@ -1086,8 +1086,9 @@ private fun AgentCard(session: Session, a: Agent, onOpen: (Agent) -> Unit, neste
                     Text(a.title.ifBlank { a.state }, color = Theme.dim, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(listOfNotNull(a.state, space?.let { session.spaceName(it) }).joinToString(" · "), color = Theme.stateColor(a.state), fontSize = 12.sp)
                     ReplyExcerpt(session, a, herdr.core.Reply.COVER_LINES, 12, Modifier.padding(top = 6.dp))
-                    // The terminal's last lines stand in only for an agent that reported no reply.
-                    session.screens[a.address]?.takeIf { a.reply.isEmpty() }?.let { screen ->
+                    // The terminal's last lines stay unless the reply replaces them: only for an agent that has stopped (done, idle);
+                    // a blocked or working card keeps them, they are what is being asked or done.
+                    session.screens[a.address]?.takeIf { !(a.reply.isNotEmpty() && herdr.core.Reply.showsOnCard(a.state)) }?.let { screen ->
                         val tail = remember(screen) { herdr.core.Prompts.tail(screen, 3) }
                         if (tail.isNotEmpty() && herdr.core.Prompts.choices(screen).isEmpty()) {
                             Text(

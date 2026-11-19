@@ -224,6 +224,9 @@ class LabelQueue {
 
 /** What is really in front of someone. */
 object Looking {
+    /** A dialog or sheet is over the panes: settings, saved commands, or the reader sheet of an agent's last reply. */
+    fun dialogOver(settings: Boolean, snippets: Boolean, replySheet: Boolean): Boolean = settings || snippets || replySheet
+
     /** A pane of the shown tab: its node id and its terminal (null: a mod pane, nothing to look at). */
     data class Pane(val id: String, val terminal: String?)
 

@@ -138,6 +138,8 @@ data class Agent(
     val mark: Mark = Mark.NONE,
     /** The agent's last reply as plain text (the status message it reported; the Mac's helper cuts it at 600), or empty. */
     val reply: String = "",
+    /** The raw reply was exactly the helper's limit long: it may have been cut (decided before any trimming). */
+    val replyMaybeCut: Boolean = false,
 )
 
 /** Where a pane lives. */
@@ -1104,6 +1106,7 @@ class Session(private val context: Context) {
                 pinned = Pins.isPinned(labels[Labels.PINNED].str),
                 mark = Seen.mark(reported, turn, seen),
                 reply = Reply.clean(status["msg"].str),
+                replyMaybeCut = Reply.maybeCut(status["msg"].str),
             )
         }.sortedBy { URGENCY.indexOf(it.state).let { i -> if (i < 0) 99 else i } }
         return Pins.order(list) { it.pinned }
@@ -1529,7 +1532,10 @@ class Session(private val context: Context) {
         } catch (e: RpcException) {
             throw IllegalStateException(Reading.errorText(e.kind, e.message), e)
         }
-        return FilePart.of(r)
+        // Counting bytes and reading a big answer is not main-thread work.
+        return withContext(Dispatchers.Default) {
+            FilePart.of(r).also { check(it.first == offset) { "The core answered from line ${it.first}, not $offset." } }
+        }
     }
 
     /** Files and Changes wrap long lines (this phone's choice, never shared). */

@@ -43,6 +43,12 @@ class LookingTest {
         assertEquals(setOf("b", "c"), Looking.panes(base.copy(allPanes = listOf(a, b, c), drawn = listOf(b, c))))
     }
 
+    @Test fun theReplySheetOverAWideLayoutStopsLooking() {
+        assertEquals(setOf("a", "b"), Looking.panes(base.copy(dialogOver = Looking.dialogOver(false, false, false))))
+        assertEquals(emptySet(), Looking.panes(base.copy(dialogOver = Looking.dialogOver(false, false, true))))
+        assertEquals(emptySet(), Looking.panes(base.copy(dialogOver = Looking.dialogOver(true, false, false), peek = "a")))
+    }
+
     @Test fun nobodyLooksWhenAwayOrCovered() {
         assertEquals(emptySet(), Looking.panes(base.copy(foreground = false)))
         assertEquals(emptySet(), Looking.panes(base.copy(covered = true, peek = "a")))

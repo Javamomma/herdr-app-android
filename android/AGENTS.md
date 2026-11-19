@@ -181,23 +181,28 @@ From the 2026-11-12 repair build. Read before changing these paths.
   (`placeIndex`, rebuilt on layout change) and `derivedStateOf`. `parent` for a remote helper is unverified against a real remote core (no machine
   here, `hc rpc` absent): `AgentTree.resolveParent` tries `machine/parent` first, then the value as given. A parent chain through a plain terminal
   goes to the nearest agent (`AgentTree.nearestAgent`).
-- **Reading** (`Reading`, `Chunks`, `Reply` in `protocol/Reading.kt`, `ui/Reader.kt`, `ui/Panels.kt`, `Session.readFile`): `file.read` takes
-  `offset` and `limit` in **lines** (we ask for 20,000) and the core also stops at 8 MB of whole lines; the reply has `first`, `last`, `lines`,
-  so "cut" is `last < lines` and "Load more" is one more read at `offset = last + 1`, appended (if it does not follow on, the file changed and it
-  reloads). A non-UTF-8 file is the error kind `not_text`; text with NULs or many control characters is also called binary: one notice, no drawing.
-  The text goes into blocks (`Chunks.split`: 200 lines or 8,000 characters, a line is cut only if it alone is over the limit, never inside a
-  surrogate pair) drawn as monospace `Text` inside one `SelectionContainer`. Up to 60,000 characters every block is composed (a plain scrolling
-  `Column`, so Select all reaches everything); above that a `LazyColumn`, because composing a whole big file would freeze, and Compose then selects
-  only what is composed, so "Copy all" (capped by `Clip.limit`) is in the bar. Wrap (default on) is `viewPrefs` `wrapLines`; the font is the
-  terminal's `font` setting held to 10-16 sp. Not measured on a device: the 60,000 limit and the 200-line block are assumptions. The diff uses the
-  same viewer with per-line colours. Rejected: reading binary with `hc exec cat`, splitting the file into several selection containers.
-  **Last reply** is the terminal record's `status.msg` (OSC 7501 `msg`, base64 on the wire, plain text in the record); it used to be only a fallback
-  for the card title and now is `Agent.reply`. The 600-character cut is the Mac helper's (the core's own source has no such cap, and some agents
-  report no message at all, then nothing is shown and the cover card keeps its terminal tail). `Reply.clean` drops control characters and text
-  direction overrides; the text is drawn as `Text` only (never linkified or run). `Reply.excerpt` keeps 4 (cover) or 3 (list) lines and shows
-  "Show all" when it left text out, when the card clips it, or when the reply is 600 characters or more. The sheet (`session.replyOpen`) never
-  attaches or shows a terminal, so it is not "looking" and never takes control. A later build could read the full reply from the agent's
-  transcript (label `claude.transcript` names the file) with `file.read`: not done here, by decision.
+- **Reading** (`Reading`, `ReadDoc`, `Chunks`, `Reply` in `protocol/Reading.kt`, `ui/Reader.kt`, `ui/Panels.kt`, `Session.readFile`): `file.read` takes
+  `offset` (counted from 1: `files.rs` rejects 0 and skips `offset - 1` lines) and `limit` in **lines** (we ask for 20,000); the core also stops at 8 MB
+  of whole lines. The answer has `first`, `last`, `lines`: cut is `last < lines`; "Load more" is one read at `last + 1`, joined by `ReadDoc.more`
+  (only the new text is cleaned and split; no new line = "Nothing more could be loaded"; an answer that does not follow on = the file changed, reload).
+  The first read must answer `first == 1`. Loading stops at 4 MB (`CEILING_BYTES`, said in the notice). Bytes are counted once in `FilePart` and kept as
+  a total; reading, cleaning, splitting and Copy all run on `Dispatchers.Default`. A non-UTF-8 file is the error kind `not_text`; valid text with more than
+  1 in 20 NUL/control/U+FFFD in its first 8,000 characters is also called binary: one notice, no drawing.
+  What is drawn and copied is `Reading.display(raw)`: CRLF to LF, every other control or text-direction character one U+FFFD with the notice "Hidden
+  control characters were replaced". Blocks (`Chunks`): each ends with its own `\n` except the last, so a copy across a block border keeps the lines
+  (Compose joins selectables with nothing); the empty line a trailing break adds is cut off by a layout modifier, and a blank last line is a spacer.
+  Up to 60,000 characters it is ONE block in a scrolling `Column` (Select all reaches everything); above, blocks of 200 lines / 8,000 characters in a
+  `LazyColumn` (no freeze), where a selection only reaches what is composed: a standing line says so and "Copy all" (first 200,000 characters kept, the
+  notice gives the numbers) copies the loaded text. A line over 8,000 characters is cut (never in a surrogate pair, combining mark or ZWJ sequence); its
+  pieces keep the line's colour but are drawn as separate rows. Wrap (default on) is `viewPrefs` `wrapLines`; the font is the terminal's `font` setting held
+  to 10-16 sp. Not measured on a device: the 60,000 limit, the 200-line block and the trailing-line trim. Changes uses the same viewer with per-line colours.
+  **Last reply** is the terminal record's `status.msg` (OSC 7501 `msg`), `Agent.reply` after `Reply.clean` (escape sequences, controls and direction overrides
+  removed; plain `Text`, never linkified or run). The Mac helper's cut at 600 characters is not in the core's source: `Agent.replyMaybeCut` is true only
+  when the RAW reply is exactly 600 characters (decided before trimming; longer or shorter ones are not cut), and the sheet says "may be cut short".
+  The card shows the reply only for done/idle agents (`Reply.showsOnCard`); a blocked or working card keeps its terminal tail. `Reply.excerpt` keeps 4 (cover) or
+  3 (list) lines; "Show all" when it left text out, the card clips it, or it may be cut. The sheet (`session.replyOpen`, cleared with the view) never attaches or
+  shows a terminal and counts as a dialog over the panes (`Looking.dialogOver`), so nothing under it is marked seen. A later build could read the full reply
+  from the agent's transcript (label `claude.transcript`): not done, by decision.
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 

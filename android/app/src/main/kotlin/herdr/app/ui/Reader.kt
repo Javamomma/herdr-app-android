@@ -3,7 +3,10 @@ package herdr.app.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,13 +27,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -44,15 +51,19 @@ import herdr.app.Session
 import herdr.app.Theme
 import herdr.core.Chunk
 import herdr.core.Chunks
+import herdr.core.ReadDoc
 import herdr.core.Reading
 import herdr.core.Reply
 import herdr.term.Clip
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-/** The start of an agent's last reply on its card, with "Show all" when there is more. Plain text only. */
+/** The start of an agent's last reply on its card, with "Show all" when there is more. Plain text only; only for an agent that has stopped. */
 @Composable
 fun ReplyExcerpt(session: Session, a: Agent, maxLines: Int, fontSp: Int, modifier: Modifier = Modifier) {
-    if (a.reply.isEmpty()) return
-    val e = remember(a.reply, maxLines) { Reply.excerpt(a.reply, maxLines, maxLines * 100) }
+    if (a.reply.isEmpty() || !Reply.showsOnCard(a.state)) return
+    val e = remember(a.reply, maxLines, a.replyMaybeCut) { Reply.excerpt(a.reply, maxLines, maxLines * 100, a.replyMaybeCut) }
     if (e.text.isEmpty()) return
     var overflow by remember(e.text) { mutableStateOf(false) }
     Column(modifier) {
@@ -73,7 +84,7 @@ fun ReplyExcerpt(session: Session, a: Agent, maxLines: Int, fontSp: Int, modifie
 
 /**
  * The whole last reply in a sheet: wrapped, selectable, with Copy. It opens no terminal and attaches to nothing
- * (it is not "looking at" the agent); the text is the agent's output and stays plain.
+ * (it is not "looking" at the agent; while it is open nothing under it counts as looked at); the text is the agent's output and stays plain.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,7 +93,7 @@ fun ReplySheet(session: Session) {
     val agent = session.agents().firstOrNull { it.address == address }
     val text = agent?.reply.orEmpty()
     val clipboard = LocalClipboardManager.current
-    var copied by remember(address) { mutableStateOf(false) }
+    var copied by remember(address, text) { mutableStateOf(false) }
     ModalBottomSheet(onDismissRequest = { session.replyOpen = null }, containerColor = Theme.panel) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -95,70 +106,104 @@ fun ReplySheet(session: Session) {
             if (text.isEmpty()) {
                 Text("No reply to show.", color = Theme.dim, fontSize = 13.sp, modifier = Modifier.padding(vertical = 16.dp))
             } else {
-                SelectionContainer {
-                    Text(
-                        text, color = Theme.text, fontSize = 14.sp, lineHeight = 20.sp,
-                        modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(bottom = 8.dp),
-                    )
+                // The weight goes on the container (a weight on the Text inside it would do nothing), so a tall reply scrolls and the notice below keeps its room.
+                SelectionContainer(Modifier.weight(1f, fill = false)) {
+                    Text(text, color = Theme.text, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.verticalScroll(rememberScrollState()).padding(bottom = 8.dp))
                 }
-                Reply.cutNotice(text)?.let { Text(it, color = Theme.dim, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp)) }
+                Reply.cutNotice(agent?.replyMaybeCut == true)?.let { Text(it, color = Theme.dim, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp)) }
             }
-            androidx.compose.foundation.layout.Spacer(Modifier.padding(bottom = 12.dp))
+            Spacer(Modifier.padding(bottom = 12.dp))
         }
     }
 }
 
-/** Wrap or No wrap, remembered on this phone; and an optional "Copy all". */
+/** Wrap or No wrap, remembered on this phone; "Copy all" with what it did. */
 @Composable
-fun ViewBar(session: Session, onCopyAll: (() -> Unit)?, copied: Boolean) {
+fun ViewBar(session: Session, onCopyAll: (() -> Unit)?, note: String?) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
         TextButton(
             onClick = { session.updateWrapLines(!session.wrapLines) },
             modifier = Modifier.semantics { contentDescription = if (session.wrapLines) "Long lines wrap. Tap for no wrap" else "Long lines scroll sideways. Tap to wrap" },
         ) { Text(if (session.wrapLines) "Wrap" else "No wrap") }
-        if (onCopyAll != null) TextButton(onClick = onCopyAll) { Text(if (copied) "Copied" else "Copy all") }
+        if (onCopyAll != null) TextButton(onClick = onCopyAll) { Text("Copy all") }
+        if (note != null) Text(note, color = Theme.dim, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 4.dp))
     }
 }
 
 /**
- * [text] in blocks of lines (`Chunks`), monospace, long lines wrapped or scrolling sideways, one selection across the
- * whole text. Up to `Reading.EAGER_CHARS` every block is composed, so Select all reaches everything; past that the
- * blocks are lazy (only those scrolled into view exist, so a big file does not freeze) and a drag-selection or Select all
- * only reaches what is composed: "Copy all" in the bar copies the full text.
+ * A loaded file or diff: the bar (wrap, Copy all), one-line notices (hidden characters replaced, large file), the text,
+ * and [footer] under it (the cut notice and "Load more"). Copy all runs off the main thread and keeps the START of a very big file.
  */
 @Composable
-fun TextViewer(text: String, wrap: Boolean, fontSp: Int, modifier: Modifier = Modifier, colorOf: ((String) -> Color)? = null) {
-    val blocks = remember(text) { Chunks.split(text) }
-    val lazy = Reading.lazy(text)
+fun DocPane(session: Session, doc: ReadDoc, colorOf: ((String) -> Color)? = null, footer: @Composable () -> Unit = {}) {
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var note by remember(doc) { mutableStateOf<String?>(null) }
+    Column(Modifier.fillMaxSize()) {
+        ViewBar(session, onCopyAll = if (doc.chunks.isEmpty()) null else ({
+            scope.launch {
+                val c = withContext(Dispatchers.Default) { Reading.copyAll(doc, Clip.MAX_CHARS) }
+                clipboard.setText(AnnotatedString(c.text))
+                note = Reading.copyNotice(c)
+            }
+        }), note = note)
+        if (doc.replaced) Text(Reading.REPLACED_NOTICE, color = Theme.dim, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp))
+        if (Reading.lazy(doc.chars)) Text(Reading.LAZY_HINT, color = Theme.dim, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp))
+        Box(Modifier.weight(1f)) {
+            if (doc.chunks.isEmpty()) Text(if (doc.lines == 0) "Empty file." else "", color = Theme.dim, fontSize = 13.sp, modifier = Modifier.padding(12.dp))
+            else TextViewer(doc, session.wrapLines, session.readerFontSp(), colorOf = colorOf)
+        }
+        footer()
+    }
+}
+
+/**
+ * [doc]'s blocks, monospace, long lines wrapped or scrolling sideways, one selection across the whole text. Every block's
+ * text ends with its own line break (the last one aside), so a copy across a border keeps the lines apart. Up to
+ * `Reading.EAGER_CHARS` it is one block (Select all reaches everything); past that the blocks are lazy (only those scrolled
+ * into view exist, so a big file does not freeze) and a selection only reaches what is composed: "Copy all" has it all.
+ */
+@Composable
+fun TextViewer(doc: ReadDoc, wrap: Boolean, fontSp: Int, modifier: Modifier = Modifier, colorOf: ((String) -> Color)? = null) {
+    val lazy = Reading.lazy(doc.chars)
     val base = modifier.fillMaxSize().background(Theme.bg)
     val h = rememberScrollState()
     SelectionContainer(Modifier.fillMaxSize()) {
-        val scrollSideways = if (wrap) base else base.horizontalScroll(h)
+        val sideways = if (wrap) base else base.horizontalScroll(h)
         if (lazy) {
-            LazyColumn(scrollSideways, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
-                items(blocks) { Block(it, wrap, fontSp, colorOf) }
+            LazyColumn(sideways, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
+                items(doc.chunks) { Block(it, wrap, fontSp, colorOf) }
             }
         } else {
-            Column(scrollSideways.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) { blocks.forEach { Block(it, wrap, fontSp, colorOf) } }
+            Column(sideways.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) { doc.chunks.forEach { Block(it, wrap, fontSp, colorOf) } }
         }
     }
 }
 
+/** Drops the empty last line a trailing line break adds to a block, so blocks stack without blank lines between them. */
+private fun Modifier.withoutTrailingBlankLine(trim: Boolean, lineSp: Float): Modifier = if (!trim) this else layout { m, c ->
+    val p = m.measure(c)
+    val cut = lineSp.sp.roundToPx()
+    layout(p.width, (p.height - cut).coerceAtLeast(0)) { p.place(0, 0) }
+}
+
 @Composable
 private fun Block(chunk: Chunk, wrap: Boolean, fontSp: Int, colorOf: ((String) -> Color)?) {
+    val lineSp = fontSp * 1.35f
+    if (chunk.text.isEmpty()) {
+        // A blank last line: room, nothing to copy.
+        Spacer(Modifier.height(with(androidx.compose.ui.platform.LocalDensity.current) { lineSp.sp.toDp() }))
+        return
+    }
     val shown = remember(chunk, colorOf == null) {
-        if (colorOf == null) AnnotatedString(chunk.text.ifEmpty { " " })
+        if (colorOf == null) AnnotatedString(chunk.text)
         else buildAnnotatedString {
-            val lines = chunk.text.split('\n')
-            lines.forEachIndexed { i, line ->
-                withStyle(SpanStyle(color = colorOf(line))) { append(line) }
-                if (i < lines.lastIndex) append('\n')
-            }
-            if (chunk.text.isEmpty()) append(" ")
+            for (seg in Chunks.segments(chunk)) withStyle(SpanStyle(color = colorOf(seg.lead))) { append(seg.text) }
         }
     }
     Text(
-        shown, color = Theme.text, fontSize = fontSp.sp, lineHeight = (fontSp * 1.35f).sp, fontFamily = FontFamily.Monospace,
-        softWrap = wrap, modifier = Modifier.padding(horizontal = 10.dp),
+        shown, color = Theme.text, fontSize = fontSp.sp, fontFamily = FontFamily.Monospace, softWrap = wrap,
+        style = TextStyle(lineHeight = lineSp.sp, lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)),
+        modifier = Modifier.padding(horizontal = 10.dp).withoutTrailingBlankLine(chunk.text.endsWith('\n'), lineSp),
     )
 }
