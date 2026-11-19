@@ -53,15 +53,17 @@ fun FindPanel(session: Session, onClose: () -> Unit, onOpened: () -> Unit) {
     val focus = remember { FocusRequester() }
     BackHandler(onBack = onClose)
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    val results = Find.search(query, session.findItems())
-    val states = session.agents().associate { it.address to it.state }
+    // Computed only while this panel is composed (it is not when Find is closed); the terminals and layout it reads are state.
+    val items by remember { androidx.compose.runtime.derivedStateOf { session.findItems() } }
+    val results = remember(query, items) { Find.search(query, items) }
+    fun open(address: String) { if (session.showTerminal(address)) onOpened() }
     Column(Modifier.fillMaxSize().padding(top = 8.dp)) {
         Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = query, onValueChange = { query = it }, singleLine = true,
                 placeholder = { Text("Find a terminal…", fontSize = 14.sp) },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { results.firstOrNull()?.let { session.showTerminal(it.address); onOpened() } }),
+                keyboardActions = KeyboardActions(onSearch = { if (query.isNotBlank()) results.firstOrNull()?.let { open(it.address) } }),
                 modifier = Modifier.weight(1f).focusRequester(focus),
             )
             IconButton(onClick = { if (query.isEmpty()) onClose() else query = "" }) {
@@ -70,7 +72,7 @@ fun FindPanel(session: Session, onClose: () -> Unit, onOpened: () -> Unit) {
         }
         if (results.isEmpty()) Text("No terminal matches.", color = Theme.dim, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
         LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Top) {
-            items(results, key = { it.address }) { r -> FindRow(r, states[r.address]) { session.showTerminal(r.address); onOpened() } }
+            items(results, key = { it.address }) { r -> FindRow(r, r.state) { open(r.address) } }
         }
     }
 }

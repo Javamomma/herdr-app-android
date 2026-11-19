@@ -169,6 +169,14 @@ From the 2026-11-12 repair build. Read before changing these paths.
   (`AgentTree.expanded`), else folded with "N helpers"; the person's choice is per parent in memory only (`Session.helpersOpen`). Menu and swipe are
   the same rows. Rejected: matching space or tab names (they are shown, not searched), saving fold state, and swiping the pane title bar for
   the next pane (not added: it cannot be checked without the phone and risks the terminal's sideways drags).
+  Review fixes: a blocked or error helper is always shown whatever fold was chosen (done-unread may stay folded; the folded header says
+  "2 helpers · 1 done"); `helpersOpen` and `stackShown` are cleared with the seen tracker (disconnect, new host, demo). A jump drops a zoom on another
+  pane and, for a hidden stack child, sets `Session.stackShown` (this phone's own choice, read by `activeChild`/`drawnPanes`, never written to the
+  layout document: the app has no stack switcher that writes it). Find closes when its panel is not shown (no Back swallowed, focus cleared), refuses
+  a terminal that closed meanwhile (notice), needs a non-blank query for Enter, and is computed only while composed from one terminal-to-place index
+  (`placeIndex`, rebuilt on layout change) and `derivedStateOf`. `parent` for a remote helper is unverified against a real remote core (no machine
+  here, `hc rpc` absent): `AgentTree.resolveParent` tries `machine/parent` first, then the value as given. A parent chain through a plain terminal
+  goes to the nearest agent (`AgentTree.nearestAgent`).
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 

@@ -84,17 +84,33 @@ fun JsonObject.find(id: String): JsonObject? = walk().firstOrNull { it.nodeId ==
 fun JsonObject.panes(): List<JsonObject> = walk().filter { it.isPane }
 
 /** The panes a tab really draws: every child of a row or column, but only the active child of a stack. */
-fun JsonObject.drawnPanes(): List<JsonObject> = when {
+fun JsonObject.drawnPanes(shown: Map<String, String> = emptyMap()): List<JsonObject> = when {
     isPane -> listOf(this)
-    type == "stack" -> activeChild()?.drawnPanes().orEmpty()
-    else -> children.flatMap { it.drawnPanes() }
+    type == "stack" -> activeChild(shown)?.drawnPanes(shown).orEmpty()
+    else -> children.flatMap { it.drawnPanes(shown) }
+}
+
+/**
+ * For each stack on the way down to pane [paneId]: the stack's id to the child that holds the pane. This phone's own
+ * choice of what a stack shows (never written to the shared document); empty when the pane is not found.
+ */
+fun JsonObject.stackPath(paneId: String): Map<String, String> {
+    fun go(n: JsonObject): Map<String, String>? {
+        if (n.isPane) return if (n.nodeId == paneId) emptyMap() else null
+        for (c in n.children) {
+            val r = go(c) ?: continue
+            return if (n.type == "stack") r + (n.nodeId to c.nodeId) else r
+        }
+        return null
+    }
+    return go(this).orEmpty()
 }
 
 fun JsonObject.parentOf(id: String): JsonObject? = walk().firstOrNull { p -> p.children.any { it.nodeId == id } }
 
 /** The shown child of a stack: its `active`, else the first. */
-fun JsonObject.activeChild(): JsonObject? {
-    val active = this["active"].str
+fun JsonObject.activeChild(shown: Map<String, String> = emptyMap()): JsonObject? {
+    val active = shown[nodeId] ?: this["active"].str
     return children.firstOrNull { it.nodeId == active } ?: children.firstOrNull()
 }
 

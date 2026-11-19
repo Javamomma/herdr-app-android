@@ -15,6 +15,8 @@ data class FindItem(
     val space: String? = null,
     val tab: String? = null,
     val pinned: Boolean = false,
+    /** blocked / error / done / working / idle for an agent, null for a plain terminal. */
+    val state: String? = null,
 )
 
 /** Search over every terminal of the connected core (docs: AGENTS.md, "Find"). */
@@ -122,11 +124,58 @@ object AgentTree {
         return roots.withIndex().sortedWith(compareBy({ key(it.value) }, { it.index })).map { Branch(it.value, helpers.getValue(it.value)) }
     }
 
-    /** States that need a look: blocked, error, or done and unread (the shown state is "done" only while unread). */
-    fun needsAttention(state: String) = state == "blocked" || state == "error" || state == "done"
+    /** States that must always be visible: blocked or error. */
+    fun urgent(state: String) = state == "blocked" || state == "error"
 
-    /** Open when the person chose so, else when any helper needs attention. */
-    fun expanded(chosen: Boolean?, helperStates: List<String>): Boolean = chosen ?: helperStates.any(::needsAttention)
+    /** Done and unread (the shown state is "done" only while unread): may stay folded if the person folded it. */
+    fun unread(state: String) = state == "done"
+
+    /** States that need a look: blocked, error, or done and unread. */
+    fun needsAttention(state: String) = urgent(state) || unread(state)
+
+    /**
+     * Open when any helper is blocked or in error, whatever was chosen. Otherwise the person's choice, else open when
+     * a helper is done and unread.
+     */
+    fun expanded(chosen: Boolean?, helperStates: List<String>): Boolean =
+        helperStates.any(::urgent) || (chosen ?: helperStates.any(::unread))
 
     fun countText(n: Int): String = if (n == 1) "1 helper" else "$n helpers"
+
+    /** The header under a parent: "3 helpers"; folded it also says what is waiting there ("3 helpers · 1 done"). */
+    fun summary(helperStates: List<String>, open: Boolean): String {
+        val base = countText(helperStates.size)
+        if (open) return base
+        val done = helperStates.count(::unread)
+        return if (done > 0) "$base · $done done" else base
+    }
+
+    /**
+     * The `parent` of [address] as an address in the same list. A parent without a machine prefix on a helper that lives on
+     * another machine is that machine's own (`t7` for `vps/t9` means `vps/t7`) when [exists] says so; otherwise the value as
+     * given. Blank is none.
+     */
+    fun resolveParent(address: String, raw: String?, exists: (String) -> Boolean): String? {
+        val p = raw?.takeIf { it.isNotBlank() } ?: return null
+        val machine = machineOf(address)
+        if (machine != null && '/' !in p) {
+            val own = "$machine/$p"
+            if (exists(own)) return own
+        }
+        return p
+    }
+
+    /**
+     * The nearest agent above [first] (a helper's parent chain may pass through plain terminals); null when the chain
+     * ends or loops without one.
+     */
+    fun nearestAgent(first: String?, isAgent: (String) -> Boolean, parentOf: (String) -> String?): String? {
+        var cur = first
+        val seen = HashSet<String>()
+        while (!cur.isNullOrEmpty() && seen.add(cur)) {
+            if (isAgent(cur)) return cur
+            cur = parentOf(cur)
+        }
+        return null
+    }
 }

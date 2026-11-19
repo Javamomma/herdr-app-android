@@ -14,10 +14,13 @@ import herdr.app.ssh.Secrets
 import herdr.app.ssh.SshLink
 import herdr.app.ssh.UnknownHostKey
 import herdr.core.Alerting
+import herdr.core.AgentTree
 import herdr.core.Axis
+import herdr.core.Branch
 import herdr.core.FindItem
 import herdr.core.LabelQueue
 import herdr.core.Labels
+import herdr.core.stackPath
 import herdr.core.Mark
 import herdr.core.Pins
 import herdr.core.Seen
@@ -508,6 +511,12 @@ class Session(private val context: Context) {
         }
     }
 
+    /** What belongs to one core's terminals and layout ids: forgotten on disconnect, a new host and the demo. */
+    private fun resetView() {
+        helpersOpen.clear()
+        stackShown.clear()
+    }
+
     fun disconnect() {
         connecting++
         clearQueue()
@@ -519,6 +528,7 @@ class Session(private val context: Context) {
         core = null
         labelQueue.reset()
         seenTracker.reset()
+        resetView()
         trackedHost = null
         conn = Conn.Idle
     }
@@ -636,6 +646,7 @@ class Session(private val context: Context) {
         val host = if (demo) "demo" else "${profile.user}@${profile.host}:${profile.port}"
         if (trackedHost != host) {
             seenTracker.reset()
+            resetView()
             trackedHost = host
         }
         labelQueue.reset()
@@ -937,27 +948,70 @@ class Session(private val context: Context) {
         return null
     }
 
-    fun placeOfTerminal(address: String): PanePlace? {
-        for (s in spaces) for (t in s.tabs) t.root.panes().firstOrNull { it.terminal == address }?.let { return PanePlace(s, t, it) }
-        return null
+    /** Where each terminal's first pane is, rebuilt only when the layout changes (many lists look terminals up per update). */
+    private val placeIndex: Map<String, PanePlace> by androidx.compose.runtime.derivedStateOf {
+        val m = HashMap<String, PanePlace>()
+        for (s in spaces) for (t in s.tabs) for (p in t.root.panes()) p.terminal?.let { m.putIfAbsent(it, PanePlace(s, t, p)) }
+        m
+    }
+
+    fun placeOfTerminal(address: String): PanePlace? = placeIndex[address]
+
+    /** The terminal's `parent` as an address in the core's list (a machine-local `t7` on `vps/t9` is `vps/t7`). */
+    fun parentOfTerminal(address: String): String? =
+        AgentTree.resolveParent(address, terminals[address]["parent"].str) { terminals.containsKey(it) }
+
+    /** The helper rows: agents under their nearest agent ancestor (the chain may pass through plain terminals). */
+    fun helperTree(agents: List<Agent>): List<Branch> {
+        val by = agents.associateBy { it.address }
+        return AgentTree.build(
+            agents.map { it.address },
+            { a -> AgentTree.nearestAgent(parentOfTerminal(a), { it in by }, ::parentOfTerminal) },
+        ) { by[it]?.pinned == true }
     }
 
     /** Opens what an agent runs in: its pane, else its parent's tab with a peek. */
-    fun showAgent(a: Agent) = showTerminal(a.address, a.parent)
+    fun showAgent(a: Agent) { showTerminal(a.address, a.parent) }
 
-    /** Opens a terminal: switches to its space and tab and focuses its pane; without a pane, its parent's tab with a peek (Keep as tab). */
-    fun showTerminal(address: String, parent: String? = null) {
+    /**
+     * Opens a terminal: its space and tab, with its pane focused, drawn and the target of keys and the Type box (a zoom on
+     * another pane is dropped; a stack's other child is shown by this phone only, never written to the layout document);
+     * without a pane, its parent's tab with a peek (Keep as tab). False, with a notice, when it has closed meanwhile.
+     */
+    fun showTerminal(address: String, parent: String? = null): Boolean {
+        if (terminals[address] == null) {
+            notice = "That terminal has closed"
+            return false
+        }
         val place = placeOfTerminal(address)
         if (place != null) {
+            val paneId = place.pane["id"].str ?: ""
             showTab(place.space.id, place.tab.id)
-            focused[place.tab.id] = place.pane["id"].str ?: ""
+            focused[place.tab.id] = paneId
+            if (zoomed[place.tab.id] != paneId) zoomed.remove(place.tab.id)
+            stackShown.putAll(place.tab.root.stackPath(paneId))
             peek = null
         } else {
-            val tabOf = parent ?: terminals[address]["parent"].str?.ifEmpty { null }
-            tabOf?.let { placeOfTerminal(it) }?.let { showTab(it.space.id, it.tab.id) }
+            val tabOf = parent ?: parentOfTerminal(address)
+            tabOf?.let { nearestPlace(it) }?.let { showTab(it.space.id, it.tab.id) }
             peek = address
         }
+        return true
     }
+
+    /** The place of [address], or of the first ancestor that has one. */
+    private fun nearestPlace(address: String): PanePlace? {
+        var cur: String? = address
+        val seen = HashSet<String>()
+        while (cur != null && seen.add(cur)) {
+            placeOfTerminal(cur)?.let { return it }
+            cur = parentOfTerminal(cur)
+        }
+        return null
+    }
+
+    /** Which child a stack shows on this phone (stack node id to child id), set by a jump to a hidden pane. In memory only. */
+    val stackShown = androidx.compose.runtime.mutableStateMapOf<String, String>()
 
     /** Helpers shown open or closed by the person, per parent address. Only in memory. */
     val helpersOpen = androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
@@ -984,6 +1038,7 @@ class Session(private val context: Context) {
                 space = space?.let { spaceName(it) },
                 tab = if (space != null && tab != null) tabName(space, tab) else null,
                 pinned = a?.pinned ?: Pins.isPinned(labels[Labels.PINNED].str),
+                state = a?.state,
             )
         }
         return Pins.order(items) { it.pinned }
@@ -1028,7 +1083,7 @@ class Session(private val context: Context) {
                 state = Seen.display(reported, turn, seen),
                 app = status["app"].str?.ifEmpty { null } ?: t["foreground"]["name"].str ?: "agent",
                 title = status["title"].str?.ifEmpty { null } ?: status["msg"].str?.ifEmpty { null } ?: t["title"].str ?: "",
-                parent = t["parent"].str?.ifEmpty { null },
+                parent = parentOfTerminal(address),
                 spaceId = place?.space?.id ?: labels["herdr.space"].str?.let { qualify(it, machine) },
                 tabId = place?.tab?.id ?: labels["herdr.tab"].str?.let { qualify(it, machine) },
                 paneId = place?.pane?.get("id").str,

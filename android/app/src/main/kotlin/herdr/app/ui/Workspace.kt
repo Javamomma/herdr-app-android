@@ -218,7 +218,7 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
             dialogOver = settings || snippetsOpen, wide = wide, agentsHome = agentsHome, drawerOpen = drawerOpen,
             panelOver = panel != null && !wider,
             allPanes = tab?.root?.panes()?.map(pane).orEmpty(),
-            drawn = tab?.root?.drawnPanes()?.map(pane).orEmpty(),
+            drawn = tab?.root?.drawnPanes(session.stackShown)?.map(pane).orEmpty(),
             zoomed = tab?.let { t -> session.zoomed[t.id]?.let { z -> t.root.find(z)?.let(pane) } },
             focused = tab?.let { t -> session.focused[t.id] },
             peek = session.peek,
@@ -245,6 +245,7 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
                 onCloseSpace = { dialog = DialogKind.CloseSpace(it) },
                 onSettings = { settings = true },
                 queueOnScreen = queueInSidebar,
+                shown = LeftPanel.open(wide, session.sidebarHidden, drawerOpen),
             )
         }
         val main: @Composable () -> Unit = {
@@ -372,9 +373,12 @@ fun Dot(state: String?, size: Dp = 8.dp) {
 @Composable
 private fun Sidebar(
     session: Session, onPicked: () -> Unit, onNewSpace: (String?) -> Unit, onRenameSpace: (Space) -> Unit,
-    onCloseSpace: (Space) -> Unit, onSettings: () -> Unit, queueOnScreen: Boolean,
+    onCloseSpace: (Space) -> Unit, onSettings: () -> Unit, queueOnScreen: Boolean, shown: Boolean,
 ) {
     var finding by remember { mutableStateOf(false) }
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    // A panel that is not on screen keeps no search open: no Back swallowed, no focus, no keyboard.
+    LaunchedEffect(shown) { if (!shown) { finding = false; focus.clearFocus() } }
     if (finding) FindPanel(session, onClose = { finding = false }, onOpened = { finding = false; onPicked() })
     else SidebarList(session, onPicked, onNewSpace, onRenameSpace, onCloseSpace, onSettings, queueOnScreen) { finding = true }
 }
@@ -387,7 +391,7 @@ private fun SidebarList(
 ) {
     val agents = session.agents()
     val byAddress = agents.associateBy { it.address }
-    val branches = AgentTree.build(agents.map { it.address }, { byAddress[it]?.parent }) { byAddress[it]?.pinned == true }
+    val branches = session.helperTree(agents)
     val groups: List<String?> = listOf<String?>(null) + session.machines.map { it.name }.sorted()
     LazyColumn(Modifier.fillMaxSize().padding(vertical = 8.dp)) {
         item {
@@ -444,10 +448,11 @@ private fun SidebarList(
         for (b in branches) {
             val root = byAddress.getValue(b.root)
             val open = b.helpers.isNotEmpty() && AgentTree.expanded(session.helpersOpen[b.root], b.helpers.map { byAddress.getValue(it).state })
+            val helperText = AgentTree.summary(b.helpers.map { byAddress.getValue(it).state }, open)
             item(key = "a:${b.root}") {
                 Column {
                     AgentRow(session, root, onPicked, nested = false)
-                    if (b.helpers.isNotEmpty()) HelperToggle(session, b.root, b.helpers.size, open, indent = 16.dp)
+                    if (b.helpers.isNotEmpty()) HelperToggle(session, b.root, helperText, open, indent = 16.dp)
                 }
             }
             if (open) items(b.helpers, key = { "a:$it" }) { h -> AgentRow(session, byAddress.getValue(h), onPicked, nested = true) }
@@ -621,7 +626,7 @@ private fun TabView(session: Session, pool: TerminalPool, space: Space, tab: Tab
 private fun NodeView(session: Session, pool: TerminalPool, space: Space, tab: Tab, node: JsonObject, framed: Boolean) {
     when (node.type) {
         "row", "column" -> SplitView(session, pool, space, tab, node, framed)
-        "stack" -> node.activeChild()?.let { NodeView(session, pool, space, tab, it, framed) }
+        "stack" -> node.activeChild(session.stackShown)?.let { NodeView(session, pool, space, tab, it, framed) }
         else -> if (node.terminal != null || node.modName != null) PaneView(session, pool, space, tab, node, framed, zoomed = false)
     }
 }
@@ -1011,7 +1016,7 @@ private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit, queueOnScreen:
 private fun AgentsList(session: Session, onOpen: (Agent) -> Unit, queueOnScreen: Boolean, onQueueOpened: () -> Unit, onFind: () -> Unit) {
     val agents = session.agents()
     val byAddress = agents.associateBy { it.address }
-    val branches = AgentTree.build(agents.map { it.address }, { byAddress[it]?.parent }) { byAddress[it]?.pinned == true }
+    val branches = session.helperTree(agents)
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         item {
             val blocked = agents.count { it.state == "blocked" }
@@ -1031,10 +1036,11 @@ private fun AgentsList(session: Session, onOpen: (Agent) -> Unit, queueOnScreen:
         for (b in branches) {
             val root = byAddress.getValue(b.root)
             val open = b.helpers.isNotEmpty() && AgentTree.expanded(session.helpersOpen[b.root], b.helpers.map { byAddress.getValue(it).state })
+            val helperText = AgentTree.summary(b.helpers.map { byAddress.getValue(it).state }, open)
             item(key = b.root) {
                 Column {
                     AgentCard(session, root, onOpen, nested = false)
-                    if (b.helpers.isNotEmpty()) HelperToggle(session, b.root, b.helpers.size, open, indent = 4.dp)
+                    if (b.helpers.isNotEmpty()) HelperToggle(session, b.root, helperText, open, indent = 4.dp)
                 }
             }
             if (open) items(b.helpers, key = { it }) { h -> AgentCard(session, byAddress.getValue(h), onOpen, nested = true) }
@@ -1044,11 +1050,11 @@ private fun AgentsList(session: Session, onOpen: (Agent) -> Unit, queueOnScreen:
 
 /** "▾ 3 helpers" under an agent: tap to fold or unfold what it started (kept in memory only). */
 @Composable
-private fun HelperToggle(session: Session, parent: String, count: Int, open: Boolean, indent: Dp) {
+private fun HelperToggle(session: Session, parent: String, text: String, open: Boolean, indent: Dp) {
     Text(
-        (if (open) "▾ " else "▸ ") + AgentTree.countText(count), color = Theme.dim, fontSize = 12.sp,
+        (if (open) "▾ " else "▸ ") + text, color = Theme.dim, fontSize = 12.sp,
         modifier = Modifier.fillMaxWidth().clickable { session.helpersOpen[parent] = !open }
-            .semantics { contentDescription = (if (open) "Hide " else "Show ") + AgentTree.countText(count) }
+            .semantics { contentDescription = (if (open) "Hide " else "Show ") + text }
             .padding(start = indent + 22.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
     )
 }
