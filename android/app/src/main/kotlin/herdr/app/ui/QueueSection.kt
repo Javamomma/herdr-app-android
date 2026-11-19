@@ -46,13 +46,15 @@ import kotlinx.coroutines.delay
  * command is cleared. Refreshes while it is on screen and the app is in front, never in the background.
  */
 @Composable
-fun QueueSection(session: Session, onOpened: () -> Unit, modifier: Modifier = Modifier) {
+fun QueueSection(session: Session, onScreen: Boolean, onOpened: () -> Unit, modifier: Modifier = Modifier) {
     if (session.queueCommand.isBlank()) return
     val state = session.queue
     val connected = session.conn is herdr.app.Conn.Connected
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(session.queueCommand, connected) {
+    // Runs only while the section is really drawn ([onScreen]: drawer open, panel shown, agents home, nothing over it) and the app is resumed.
+    LaunchedEffect(session.queueCommand, connected, onScreen) {
+        if (!onScreen) return@LaunchedEffect
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             var first = true
             while (true) {
@@ -82,13 +84,11 @@ fun QueueSection(session: Session, onOpened: () -> Unit, modifier: Modifier = Mo
         }
         if (open) {
             val why = state.failure
-            if (why != null) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    Text("Couldn't load the queue: ${why.message}", color = Theme.stateColor("blocked"), fontSize = 12.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { session.requestQueueRefresh() }, enabled = !state.loading) { Text("Retry") }
-                        if (state.stale) Text("Showing the last list", color = Theme.dim, fontSize = 11.sp)
-                    }
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                if (why != null) Text("Couldn't load the queue: ${why.message}", color = Theme.stateColor("blocked"), fontSize = 12.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { session.requestQueueRefresh() }, enabled = !state.loading) { Text(if (why != null) "Retry" else "Refresh") }
+                    if (state.stale) Text("Showing the last list", color = Theme.dim, fontSize = 11.sp)
                 }
             }
             state.loadedAt?.let {

@@ -59,9 +59,12 @@ class QueueTest {
     }
 
     @Test fun onlyHttpAndHttpsOpen() {
-        for (u in listOf("https://example.com/a?b=1", "http://example.com", "HTTPS://Example.com"))
+        for (u in listOf("https://example.com/a?b=1", "http://example.com"))
             assertEquals(QueueTarget.Url(u), Queue.target(item(url = u)), u)
-        for (u in listOf("javascript:alert(1)", "file:///etc/passwd", "intent://x#Intent;end", "content://a/b", "tel:123", "ftp://a.b", "https://", "https:///x", "https://a b", "https://a\nb", "//example.com", "example.com"))
+        // The scheme is lower-cased before it is opened (the rest is left alone).
+        assertEquals(QueueTarget.Url("https://Example.com/A"), Queue.target(item(url = "HTTPS://Example.com/A")))
+        assertEquals(QueueTarget.Url("http://a.b"), Queue.target(item(url = "HtTp://a.b")))
+        for (u in listOf("javascript:alert(1)", "file:///etc/passwd", "intent://x#Intent;end", "content://a/b", "tel:123", "ftp://a.b", "https://", "https:///x", "https://a b", "https://a\nb", "//example.com", "example.com", "https://@", "https://@host/x", "https://:80/x"))
             assertFalse(Queue.openable(u), u)
     }
 
@@ -133,5 +136,139 @@ class QueueTest {
         val offline = idle.failed(QueueFailure.NotConnected)
         assertTrue(Queue.due(offline, 0, 1, connected = true))
         assertFalse(Queue.due(offline, 0, 1, connected = false))
+    }
+
+    @Test fun pathRules() {
+        for (bad in listOf("", "   ", "a\u0000b", "/tmp/a\nb", "/tmp/a\rb", "/tmp/a\tb", "/tmp/\u001b[2Jx", "/x".repeat(3000)))
+            assertFalse(Queue.validPath(bad), bad.take(20))
+        for (good in listOf("/tmp/a.md", "~/notes/a b.md", "/tmp/a:12", "/x".repeat(2000)))
+            assertTrue(Queue.validPath(good), good.take(20))
+        // An item whose file is refused is kept, and opens as text.
+        val p = parsed("""[{"id":"1","title":"t","detail":"d","file":"/tmp/a\nb"}]""").items[0]
+        assertNull(p.file)
+        assertEquals(QueueTarget.Detail("d"), Queue.target(p))
+        // A colon stays in the path (the exact path is opened).
+        assertEquals(QueueTarget.File("/tmp/a:12"), Queue.target(item(file = "/tmp/a:12")))
+    }
+
+    @Test fun kindWithLeadingSpaceIsStillAnAgentRow() {
+        val p = parsed("""[{"id":"1","kind":"  agent ask","title":"t"},{"id":"2","kind":"\tAgent","title":"t"},{"id":"3","kind":"an agent","title":"t"}]""")
+        assertEquals(listOf("3"), p.items.map { it.id })
+    }
+
+    @Test fun urlWhitespaceAndLength() {
+        assertEquals(QueueTarget.Url("https://a.b/c"), Queue.target(item(url = "   https://a.b/c  ")))
+        val p = parsed("""[{"id":"1","title":"t","url":"   https://a.b/c "}]""").items[0]
+        assertEquals("https://a.b/c", p.url)
+        val ok = "https://a.b/" + "x".repeat(Queue.MAX_URL - 12)
+        assertEquals(Queue.MAX_URL, ok.length)
+        assertEquals(QueueTarget.Url(ok), Queue.target(item(url = ok)))
+        // Too long: never cut and opened as another address; shown as text.
+        val long = ok + "y"
+        assertFalse(Queue.openable(long))
+        val t = Queue.target(item(url = long, detail = "d"))
+        assertIs<QueueTarget.Detail>(t)
+        val huge = "https://a.b/" + "z".repeat(50_000)
+        val kept = parsed("""[{"id":"1","title":"t","url":"$huge"}]""").items[0]
+        assertFalse(Queue.openable(kept.url!!))
+        assertIs<QueueTarget.Detail>(Queue.target(kept))
+    }
+
+    @Test fun draftChangesNothingUntilSaved() {
+        var d = QueueDraft("python3 a.py queue")
+        assertFalse(d.dirty)
+        assertNull(d.commit())
+        // Every keystroke of a long command is only the draft.
+        var typed = ""
+        for (c in "rm -rf ~/x; python3 a.py") { typed += c; d = d.edit(typed); assertEquals("python3 a.py queue", d.saved) }
+        assertTrue(d.dirty)
+        assertEquals("rm -rf ~/x; python3 a.py", d.commit())
+        assertEquals("", QueueDraft("x").edit("  \n ").commit())
+        assertEquals(Queue.DEFAULT_COMMAND, QueueDraft("x").reset().commit())
+        assertNull(QueueDraft(Queue.DEFAULT_COMMAND).reset().commit())
+        assertNull(QueueDraft("x").edit(" x ").commit())
+    }
+
+    @Test fun onScreenGate() {
+        fun screen(wide: Boolean = false, agentsHome: Boolean = false, drawerOpen: Boolean = false, dialogOver: Boolean = false, panelOver: Boolean = false,
+                   foreground: Boolean = true, covered: Boolean = false, peek: String? = null) =
+            Looking.Screen(foreground, covered, dialogOver, wide, agentsHome, drawerOpen, panelOver, emptyList(), null, null, peek)
+        // Folded in a terminal with the drawer shut: not on screen, however long it stays.
+        assertFalse(Looking.queueShown(screen(), sidebarBeside = false, otherDialog = false, inAgentsHome = false))
+        assertTrue(Looking.queueShown(screen(drawerOpen = true), false, false, false))
+        assertTrue(Looking.queueShown(screen(wide = true), sidebarBeside = true, otherDialog = false, inAgentsHome = false))
+        assertFalse(Looking.queueShown(screen(wide = true), sidebarBeside = false, otherDialog = false, inAgentsHome = false))
+        assertTrue(Looking.queueShown(screen(agentsHome = true), false, false, inAgentsHome = true))
+        assertFalse(Looking.queueShown(screen(), false, false, inAgentsHome = true))
+        assertFalse(Looking.queueShown(screen(wide = true, agentsHome = true), true, false, inAgentsHome = true))
+        // Nothing over it, app in front.
+        for (s in listOf(screen(drawerOpen = true, dialogOver = true), screen(drawerOpen = true, panelOver = true), screen(drawerOpen = true, foreground = false),
+            screen(drawerOpen = true, covered = true), screen(drawerOpen = true, peek = "t1")))
+            assertFalse(Looking.queueShown(s, true, false, false))
+        assertFalse(Looking.queueShown(screen(drawerOpen = true), false, otherDialog = true, inAgentsHome = false))
+    }
+
+    private val ok = QueueResult.Loaded(parsed("""[{"id":"1","title":"t"}]""").items)
+    private val oldCore = Any()
+    private val newCore = Any()
+
+    @Test fun anAnswerFromAnOldCoreIsDropped() {
+        val m = QueueModel()
+        val t = m.begin(oldCore, 100)!!
+        assertTrue(m.state.loading)
+        // The link dropped and came back (another core) before the answer.
+        assertFalse(m.finish(t, newCore, ok, 200))
+        assertEquals(emptyList(), m.state.items)
+        assertFalse(m.state.loading)
+        assertTrue(m.due(Queue.SHOW_MIN_MS, 201, true), "that try does not count")
+        val t2 = m.begin(newCore, 300)!!
+        assertTrue(m.finish(t2, newCore, ok, 310))
+        assertEquals(1, m.state.items.size)
+    }
+
+    @Test fun clearingDropsWhatIsInFlightAndWhatIsKept() {
+        val m = QueueModel()
+        m.finish(m.begin(oldCore, 1)!!, oldCore, ok, 2)
+        assertEquals(1, m.state.items.size)
+        val t = m.begin(oldCore, 3)!!
+        m.clear()
+        assertEquals(QueueState(), m.state)
+        assertFalse(m.finish(t, oldCore, ok, 4))
+        assertEquals(QueueState(), m.state)
+        // After a clear a new refresh is due at once, and the old ticket cannot disturb it.
+        val t2 = m.begin(oldCore, 5)!!
+        assertFalse(m.finish(t, oldCore, ok, 6))
+        assertTrue(m.state.loading)
+        assertTrue(m.finish(t2, oldCore, ok, 7))
+    }
+
+    @Test fun aCancelledRefreshIsNotATryAndCannotStopANewerOne() {
+        val m = QueueModel()
+        val t1 = m.begin(oldCore, 1_000)!!
+        assertNull(m.begin(oldCore, 1_001), "one at a time")
+        m.cancelled(t1)
+        assertFalse(m.state.loading)
+        assertTrue(m.due(Queue.REFRESH_MS, 1_002, true), "not counted as tried")
+        val t2 = m.begin(oldCore, 2_000)!!
+        m.cancelled(t1) // the old one's handler runs late
+        assertTrue(m.state.loading, "a newer refresh keeps loading")
+        assertTrue(m.finish(t2, oldCore, QueueResult.Failed(QueueFailure.TimedOut), 3_000))
+        assertEquals(QueueFailure.TimedOut, m.state.failure)
+    }
+
+    @Test fun aFailedTryKeepsTheLastListStale() {
+        val m = QueueModel()
+        m.finish(m.begin(oldCore, 1)!!, oldCore, ok, 2)
+        m.finish(m.begin(oldCore, 3)!!, oldCore, QueueResult.Failed(QueueFailure.NotConnected), 4)
+        assertTrue(m.state.stale)
+        assertEquals(1, m.state.items.size)
+    }
+
+    @Test fun failuresAreMappedByTypeNotText() {
+        assertEquals(QueueFailure.TimedOut, Queue.failureOf(CoreTimedOutException("whatever words"), true))
+        assertEquals(QueueFailure.NotConnected, Queue.failureOf(CoreLostException("machine.exec: no reply from core", afterWrite = true), true))
+        assertEquals(QueueFailure.NotConnected, Queue.failureOf(CoreLostException("lost the core"), false))
+        assertEquals(QueueFailure.NotConnected, Queue.failureOf(IllegalStateException("Not connected to the Mac"), false))
+        assertEquals(QueueFailure.Other("machine.exec: boom"), Queue.failureOf(RpcException(obj("message" to "boom\nmore"), "machine.exec"), true))
     }
 }

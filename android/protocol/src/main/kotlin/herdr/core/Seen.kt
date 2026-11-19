@@ -152,6 +152,18 @@ object Looking {
         val peek: String?,
     )
 
+    /**
+     * The queue section is really drawn: the app in front, nothing over it, and the list it is in shown: the wide
+     * left panel ([sidebarBeside]), the folded drawer when open, or the folded agents home. [otherDialog]: any
+     * other dialog (new space, close, rename…) is up.
+     */
+    fun queueShown(s: Screen, sidebarBeside: Boolean, otherDialog: Boolean, inAgentsHome: Boolean): Boolean {
+        if (!s.foreground || s.covered || s.dialogOver || otherDialog || s.peek != null || s.panelOver) return false
+        return if (inAgentsHome) !s.wide && s.agentsHome
+        else if (s.wide) sidebarBeside
+        else s.drawerOpen
+    }
+
     fun panes(s: Screen): Set<String> {
         if (!s.foreground || s.covered || s.dialogOver) return emptySet()
         s.peek?.let { return setOf(it) }

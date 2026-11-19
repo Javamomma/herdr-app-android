@@ -50,8 +50,10 @@ fun SidePanel(session: Session, pool: TerminalPool, kind: String, onClose: () ->
     val address = session.focusedTerminal()
     val space = session.spaces.firstOrNull { it.id == session.activeSpace }
     // A file from the queue is on the core's own machine, whatever terminal is focused.
-    val local = session.filesLocal
+    // Only Files, only for a queue item: Changes and every other way in use the focused terminal's machine.
+    val local = session.filesLocal && kind == "files"
     androidx.compose.runtime.DisposableEffect(Unit) { onDispose { session.filesLocal = false } }
+    LaunchedEffect(kind) { if (kind != "files") session.filesLocal = false }
     val machine = if (local) null else address?.let { machineOf(it) } ?: space?.machine
     val start = (if (local) null else session.cwdOf(address) ?: space?.folder?.ifEmpty { null }) ?: session.home ?: "/"
     Column(Modifier.fillMaxSize()) {
@@ -59,7 +61,7 @@ fun SidePanel(session: Session, pool: TerminalPool, kind: String, onClose: () ->
             Text(if (kind == "files") "Files" else "Changes", color = Theme.text, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             IconButton(onClick = onClose) { Icon(Icons.Default.Close, "Close", tint = Theme.dim) }
         }
-        if (kind == "files") Files(session, pool, machine, start, address) else Changes(session, machine, start)
+        if (kind == "files") Files(session, pool, machine, start, if (local) null else address) else Changes(session, machine, start)
     }
 }
 
@@ -92,7 +94,10 @@ private fun Files(session: Session, pool: TerminalPool, machine: String?, start:
     LaunchedEffect(session.fileToOpen) {
         val f = session.fileToOpen ?: return@LaunchedEffect
         session.fileToOpen = null
-        val path = f.substringBefore(':').let { p -> if (p.startsWith("/")) p else if (p.startsWith("~/") && session.home != null) session.home + p.substring(1) else join(start, p.removePrefix("./")) }
+        // From the queue the path is exact (a colon is part of it); from a terminal "path:line" is cut at the colon.
+        val exact = session.fileExact
+        session.fileExact = false
+        val path = (if (exact) f else f.substringBefore(':')).let { p -> if (p.startsWith("/")) p else if (p.startsWith("~/") && session.home != null) session.home + p.substring(1) else join(start, p.removePrefix("./")) }
         dir = path.substringBeforeLast('/').ifEmpty { "/" }
         open = path
     }
