@@ -525,6 +525,7 @@ class Session(private val context: Context) {
     private fun resetView() {
         helpersOpen.clear()
         stackShown.clear()
+        replyOpen = null
     }
 
     fun disconnect() {
