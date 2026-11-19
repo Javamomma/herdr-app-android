@@ -325,6 +325,7 @@ class DemoCore {
             "machine.exec" -> {
                 val argv = p["argv"].arr.mapNotNull { it.str }
                 val out = when {
+                    argv.any { it.contains("panel.py queue") } -> DEMO_QUEUE
                     argv.firstOrNull() == "ls" -> "app/\nprotocol/\nterminal/\nREADME.md\nbuild.gradle.kts\nsettings.gradle.kts\n"
                     argv.firstOrNull() == "git" && "status" in argv -> "## main...origin/main\n M app/src/main/kotlin/herdr/app/ui/Workspace.kt\n?? docs/demo.md\n"
                     argv.firstOrNull() == "git" && "diff" in argv -> "--- a/Workspace.kt\n+++ b/Workspace.kt\n@@ -642,3 +642,4 @@\n-        K(\"type\", composing)\n+        K(\"⌨\", imeVisible)\n         K(\"esc\")\n+        K(\"^C\")\n"
@@ -339,6 +340,14 @@ class DemoCore {
         }
     }
 }
+
+/** What the demo answers the default queue command with: invented items, one of each way to open. */
+const val DEMO_QUEUE = """[
+ {"id":"demo-1","kind":"email","source":"mail","title":"Reply to Sam about the venue","detail":"Sam asked whether Saturday still works.","age_days":2,"file":null,"verbs":[{"verb":"done"}]},
+ {"id":"demo-2","kind":"pull request","source":"github","title":"Review: add dark theme to the widget","detail":"https://example.com/demo/pull/12","age_days":1,"file":null,"url":"https://example.com/demo/pull/12","verbs":[]},
+ {"id":"demo-3","kind":"vault review","source":"vault","title":"Check the demo notes","detail":"A note waiting for a read.","age_days":5,"file":"/Users/you/demo.md","expires_in_days":3,"verbs":[]},
+ {"id":"demo-4","kind":"agent ask","source":"agents","title":"An agent stopped (the agents list shows it)","detail":"","age_days":0,"file":null,"verbs":[]}
+]"""
 
 /** When, after the demo starts, Codex reaches its permission prompt. */
 const val STORY_DELAY_MS = 15_000L

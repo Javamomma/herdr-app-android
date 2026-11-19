@@ -83,4 +83,20 @@ class DemoCoreTest {
         await("unpinned") { label("t4", Labels.PINNED) == null }
         core.close()
     }
+
+    @Test
+    fun the_demo_answers_the_default_queue_command() {
+        val demo = DemoCore()
+        val core = CoreClient.connect(demo.clientInput, demo.clientOutput) { demo.close() }
+        val r = core.call("machine.exec", obj("argv" to listOf("sh", "-c", Queue.DEFAULT_COMMAND)))
+        val text = String(java.util.Base64.getDecoder().decode(r["stdout"].str!!))
+        val out = Queue.outcome(r["code"].long, text, "", false, false)
+        val items = (out as QueueResult.Loaded).items
+        assertEquals(listOf("demo-1", "demo-2", "demo-3"), items.map { it.id })
+        assertEquals(
+            listOf(QueueTarget.Detail("Sam asked whether Saturday still works."), QueueTarget.Url("https://example.com/demo/pull/12"), QueueTarget.File("/Users/you/demo.md")),
+            items.map { Queue.target(it) },
+        )
+        core.close()
+    }
 }

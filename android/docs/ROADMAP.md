@@ -69,7 +69,7 @@ herdr socket API, not herdr-core. Their ideas were borrowed in 0.2.0.
    message was delivered; answer buttons only answer the question that was
    on screen; unnamed tabs show their agent's title.
 2. Pins, mark read/unread and a correct "seen" (shared `herdr.pinned` / `herdr.seen` labels, docs/labels.md): built, awaiting phone checks.
-3. **Read-only Queue**: an optional list of what is waiting on him, from the
+3. **Read-only Queue** (built, awaiting phone checks): an optional list of what is waiting on him, from the
    Mac's `panel.py queue` over the existing SSH session, with a stale / could
    not load state. Actions come later, one family at a time.
 4. Small reading and reply improvements (wrapped, selectable file viewer;

@@ -153,6 +153,14 @@ fun SettingsDialog(session: Session, pool: TerminalPool, onDismiss: () -> Unit, 
                 }
                 Toggle("Folded: open to agents", "The cover screen starts on the agents list", session.agentsWhenFolded) { session.updateAgentsWhenFolded(it) }
                 Toggle("Watch without resizing the Mac", "Terminals keep the Mac's size until you type in them", session.watchFirst) { session.updateWatchFirst(it) }
+                Text("Queue command", fontSize = 14.sp)
+                androidx.compose.material3.OutlinedTextField(
+                    value = session.queueCommand, onValueChange = { session.updateQueueCommand(it) },
+                    modifier = Modifier.fillMaxWidth(), textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                    minLines = 1, maxLines = 3,
+                    supportingText = { Text(if (session.queueCommand.isBlank()) "Empty: the Queue is off" else "Run on the Mac through a shell; its JSON fills the Queue in the agents list. Clear it to turn the Queue off.", fontSize = 11.sp) },
+                )
+                TextButton(onClick = { session.resetQueueCommand() }, enabled = session.queueCommand != herdr.core.Queue.DEFAULT_COMMAND) { Text("Reset to default") }
                 Text("Terminal text: ${font.toInt()} px", fontSize = 13.sp)
                 Slider(value = font, onValueChange = { font = it }, valueRange = 8f..24f, steps = 15, onValueChangeFinished = {
                     pool.fontSize = font.toInt()

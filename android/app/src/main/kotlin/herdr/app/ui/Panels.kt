@@ -49,8 +49,11 @@ import herdr.core.machineOf
 fun SidePanel(session: Session, pool: TerminalPool, kind: String, onClose: () -> Unit) {
     val address = session.focusedTerminal()
     val space = session.spaces.firstOrNull { it.id == session.activeSpace }
-    val machine = address?.let { machineOf(it) } ?: space?.machine
-    val start = session.cwdOf(address) ?: space?.folder?.ifEmpty { null } ?: session.home ?: "/"
+    // A file from the queue is on the core's own machine, whatever terminal is focused.
+    val local = session.filesLocal
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { session.filesLocal = false } }
+    val machine = if (local) null else address?.let { machineOf(it) } ?: space?.machine
+    val start = (if (local) null else session.cwdOf(address) ?: space?.folder?.ifEmpty { null }) ?: session.home ?: "/"
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(if (kind == "files") "Files" else "Changes", color = Theme.text, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))

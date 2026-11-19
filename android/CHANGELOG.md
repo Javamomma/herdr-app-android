@@ -11,6 +11,7 @@
 - A very large copy is cut to its newest 200,000 characters, and a notice says so, instead of failing on Android's clipboard limit.
 
 - Pin an agent, or mark it read or unread: long-press it in the agents list or on the cover screen, or swipe it to the right to show Pin and Read/Unread. Pinned agents go first in the list, on the cover screen and in the widget. Pins and "seen" are shared with the desktop app and the official mobile app, so an agent you looked at there is not "done" here. There is no swipe-left action.
+- A Queue at the top of the agents list (the left panel and the cover screen): what is waiting on you, read from a command run on your Mac (Settings, "Queue command"; clear it to turn the Queue off, "Reset to default" restores it). It shows "Queue · 7" (tap to open or fold; the phone remembers), refreshes when it comes on screen and every 3 minutes while it stays there with Herdr in front, says "updated N min ago", and keeps the last list, marked out of date, with the reason and Retry when a refresh fails. Tap an item: a web link opens in the browser or its app, a file opens in Files, anything else shows its text. Read-only: no buttons that change anything, and nothing in the background or in notifications.
 
 ### Fixed
 - An agent is only marked seen while it is really on screen with Herdr in front: not when it is hidden by the single-pane cover view, the agents list, the open left panel, settings or Files, or when the app is in the background or the screen is off. A "mark unread" is no longer undone while you keep looking at the agent.

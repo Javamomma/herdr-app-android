@@ -22,6 +22,11 @@ import herdr.core.Seen
 import herdr.core.SeenTerm
 import herdr.core.SeenTracker
 import herdr.core.CoreClient
+import herdr.core.CoreLostException
+import herdr.core.Queue
+import herdr.core.QueueFailure
+import herdr.core.QueueResult
+import herdr.core.QueueState
 import herdr.core.DOC_NAME
 import herdr.core.EventLines
 import herdr.core.RpcException
@@ -295,6 +300,80 @@ class Session(private val context: Context) {
     fun updateLockAfter(minutes: Int) { lockAfterMinutes = minutes; settings.edit().putInt("lockAfter", minutes).apply() }
     fun updateAgentsWhenFolded(on: Boolean) { agentsWhenFolded = on; settings.edit().putBoolean("agentsFolded", on).apply() }
     fun updateWatchFirst(on: Boolean) { watchFirst = on; settings.edit().putBoolean("watchFirst", on).apply() }
+
+    // ---- the queue: read-only, from a command run on the Mac ------------------
+
+    /** The shell command whose JSON output is the queue; empty turns the Queue off. */
+    var queueCommand by mutableStateOf(settings.getString("queueCommand", null) ?: Queue.DEFAULT_COMMAND)
+        private set
+    /** Expanded or folded to one line: this phone's choice. */
+    var queueOpen by mutableStateOf(viewPrefs.getBoolean("queueOpen", false))
+        private set
+    /** Only in memory: the items are private and are never saved on the phone. */
+    var queue by mutableStateOf(QueueState())
+        private set
+    /** A file from the queue is shown on the core's own machine, whatever terminal is focused. */
+    var filesLocal by mutableStateOf(false)
+    private var queueTried: Long? = null
+
+    fun updateQueueCommand(command: String) {
+        if (command == queueCommand) return
+        queueCommand = command
+        settings.edit().putString("queueCommand", command).apply()
+        queue = QueueState()
+        queueTried = null
+    }
+    fun resetQueueCommand() = updateQueueCommand(Queue.DEFAULT_COMMAND)
+    fun updateQueueOpen(open: Boolean) { queueOpen = open; viewPrefs.edit().putBoolean("queueOpen", open).apply() }
+
+    /** Whether the section is due a refresh (never while one runs): [every] ms after the last try. */
+    fun queueDue(every: Long) = queueCommand.isNotBlank() && Queue.due(queue, queueTried, System.currentTimeMillis(), every, conn is Conn.Connected)
+
+    fun requestQueueRefresh() { main.launch { refreshQueue() } }
+
+    /** Opens a queue item's file in the file viewer, on the core's machine. */
+    fun openQueueFile(path: String) { filesLocal = true; requested = "file:$path" }
+
+    /**
+     * Runs the queue command through a shell on the core's own machine (never a remote one) and keeps the last good
+     * list when this try fails. The command is the person's own setting; nothing from an item is ever part of it.
+     */
+    suspend fun refreshQueue() {
+        val command = queueCommand.trim()
+        if (command.isEmpty() || queue.loading) return
+        queueTried = System.currentTimeMillis()
+        queue = queue.started()
+        val result = try {
+            val r = io { it.call("machine.exec", obj("argv" to listOf("sh", "-c", command)), timeoutMs = Queue.TIMEOUT_MS) }
+            val out = r["stdout"].str ?: ""
+            // base64 is 4/3 of the bytes: past the cap, refuse before decoding.
+            if (out.length > Queue.MAX_OUTPUT_CHARS * 2) QueueResult.Failed(QueueFailure.BadOutput("too much output"))
+            else Queue.outcome(
+                code = r["code"].long,
+                stdout = String(Base64.decode(out, Base64.DEFAULT)),
+                stderr = String(Base64.decode(r["stderr"].str ?: "", Base64.DEFAULT)),
+                timedOut = r["timed_out"].bool == true,
+                truncated = r["truncated"].bool == true,
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            queue = queue.copy(loading = false)
+            throw e
+        } catch (e: CoreLostException) {
+            QueueResult.Failed(if (core == null) QueueFailure.NotConnected else if (e.afterWrite && e.message?.contains("no reply") == true) QueueFailure.TimedOut else QueueFailure.Other(e.message.orEmpty().take(200)))
+        } catch (e: RpcException) {
+            QueueResult.Failed(QueueFailure.Other(e.message.orEmpty().lineSequence().firstOrNull().orEmpty().take(200)))
+        } catch (e: IllegalStateException) {
+            QueueResult.Failed(QueueFailure.NotConnected)
+        } catch (e: Exception) {
+            QueueResult.Failed(QueueFailure.Other(e.message.orEmpty().lineSequence().firstOrNull().orEmpty().take(200)))
+        }
+        // The setting changed while it ran: that answer is for another command.
+        if (command != queueCommand.trim()) { queue = queue.copy(loading = false); return }
+        queue = when (result) {
+            is QueueResult.Loaded -> queue.loaded(result.items, System.currentTimeMillis())
+            is QueueResult.Failed -> queue.failed(result.why)
+        }
+    }
 
     private fun loadSnippets(): List<Snippet> {
         val saved = settings.getString("snippets", null) ?: return listOf(

@@ -119,6 +119,17 @@ From the 2026-11-12 repair build. Read before changing these paths.
   swipe right reveals Pin and Read/Unread; nothing on a left swipe (it only closes an open row). Alerts say "done" when
   the turn rose or the agent was working (`Alerting`), so a mark unread elsewhere is not news. Rejected: marking the
   whole tab seen (the old bug), and rewriting seen on every update.
+- **Queue** (`Queue.kt` in `protocol/`, `ui/QueueSection.kt`, `Session.refreshQueue`): a read-only section above the
+  agents in the left panel and the cover-screen list. The only source is the Settings command (default
+  `python3 ~/cos/scripts/panel/panel.py queue`, which already leaves out private work; empty = Queue off), run as
+  `machine.exec` `["sh","-c",command]` on the core's own machine (no `on`), 10 s client timeout (the core's own limit is
+  60 s), never built from item data. Parse is tolerant (unknown fields ignored, entries without `id`/`title` skipped, non-array
+  is `BadOutput`); `kind` starting "agent" is dropped (the agents list shows those); order kept; 100 items, 512 KB, fields
+  cut. Item text is untrusted: plain `Text` only; a `url` opens by VIEW intent only if http/https (else text), a `file` only in
+  the in-app Files panel on the core's machine (`Session.filesLocal`), never an intent; nothing from an item is sent to a
+  terminal or run, and `verbs` are ignored (actions come later). Items are only in memory, never saved. Refresh: on
+  coming on screen (unless tried in the last 30 s), then every 3 minutes, only while composed and the activity is RESUMED;
+  a failure keeps the last list, stale. Rejected: another source, background refresh or notifications, `$SHELL -lc`.
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 

@@ -249,7 +249,7 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
                 Row(Modifier.weight(1f)) {
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         if (agentsHome && !wide) {
-                            AgentsHome(session, onOpen = { a -> session.showAgent(a); agentsHome = false })
+                            AgentsHome(session, onOpen = { a -> session.showAgent(a); agentsHome = false }, onQueueOpened = {})
                         } else if (space == null || tab == null) {
                             Empty(session, onNewSpace = { dialog = DialogKind.NewSpace(null) })
                         } else {
@@ -393,8 +393,12 @@ private fun Sidebar(
                 }
             }
         }
+        item(key = "queue") {
+            HorizontalDivider(Modifier.padding(top = 12.dp), color = Theme.border)
+            QueueSection(session, onOpened = onPicked)
+        }
         item {
-            HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Theme.border)
+            HorizontalDivider(Modifier.padding(bottom = 12.dp), color = Theme.border)
             Text("AGENTS", color = Theme.dim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             if (agents.isEmpty()) Text("Agents that report status show here.", color = Theme.dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
         }
@@ -925,7 +929,7 @@ private fun Composer(
 /** The cover screen's front page: every agent, the ones that need you first. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit) {
+private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit, onQueueOpened: () -> Unit) {
     val agents = session.agents()
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         item {
@@ -939,6 +943,7 @@ private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit) {
                 color = Theme.text, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(4.dp, 4.dp, 4.dp, 12.dp),
             )
         }
+        item(key = "queue") { QueueSection(session, onOpened = onQueueOpened, modifier = Modifier.padding(bottom = 8.dp)) }
         items(agents, key = { it.address }) { a ->
             val space = session.spaces.firstOrNull { it.id == a.spaceId }
             var menu by remember { mutableStateOf(false) }

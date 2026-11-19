@@ -18,6 +18,10 @@ your Mac.
 
 **Shown, not stored**
 Terminal screens, files and git output come from your Mac as you look at them.
+The Queue (the agents list) shows what a command you set in Settings prints on your Mac
+(by default your own `panel.py queue`): titles and details of things waiting on you. It is
+read while the list is on screen with the app in front, kept only in memory, never saved on
+the phone and never in a notification. Clear the command in Settings to turn it off.
 
 **Background connection**
 With notifications on, the app keeps its SSH connection open in the
