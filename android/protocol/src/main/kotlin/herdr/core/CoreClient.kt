@@ -91,6 +91,8 @@ class CoreClient private constructor(
     private val replies = ConcurrentHashMap<Long, CompletableFuture<JsonElement>>()
     private val streams = ConcurrentHashMap<Int, StreamListener>()
     private val early = HashMap<Int, MutableList<Early>>()
+    /** Channels this side detached: late frames for them are dropped, not kept for a listener that will never come. */
+    private val released = HashSet<Int>()
     private val automaticInput = ConcurrentHashMap.newKeySet<Int>()
     private val lock = Any()
     @Volatile var closed = false
@@ -173,6 +175,7 @@ class CoreClient private constructor(
             else -> return
         }
         val listener = synchronized(lock) {
+            if (frame.channel in released) return
             val l = streams[frame.channel]
             if (l == null) early.getOrPut(frame.channel) { mutableListOf() }.add(item)
             if (item is Early.Closed) {
@@ -249,11 +252,18 @@ class CoreClient private constructor(
     }
 
     private fun register(channel: Int, listener: StreamListener) {
-        val pending = synchronized(lock) {
-            streams[channel] = listener
-            early.remove(channel).orEmpty()
+        // Frames that beat the attach reply wait in early[channel]. Deliver them in order, outside the lock;
+        // frames that arrive meanwhile queue behind them (the stream is registered only once none are left),
+        // so the size before the paint can't be overtaken by the reader thread.
+        while (true) {
+            val pending = synchronized(lock) {
+                val p = early.remove(channel).orEmpty()
+                if (p.isEmpty()) streams[channel] = listener
+                p
+            }
+            if (pending.isEmpty()) return
+            for (item in pending) deliver(listener, item)
         }
-        for (item in pending) deliver(listener, item)
     }
 
     /**
@@ -308,6 +318,7 @@ class CoreClient private constructor(
             streams.remove(channel)
             automaticInput.remove(channel)
             early.remove(channel)
+            released.add(channel)
         }
         send(channel, Kind.CLOSE, ByteArray(0))
     }
