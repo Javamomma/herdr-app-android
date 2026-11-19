@@ -702,9 +702,20 @@ fun TerminalBox(session: Session, pool: TerminalPool, address: String, onTouch: 
             modifier = Modifier.fillMaxSize(),
         )
         val picked = ctl.selection
+        // The label and the selection bar share the top-right corner: the bar replaces the label.
+        if (ctl.watching && picked == null) {
+            // Not clickable, so touches reach the terminal under it.
+            Text(
+                "Watching · tap to type",
+                color = Theme.dim, fontSize = 11.sp,
+                modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
+                    .background(Theme.raised.copy(alpha = 0.85f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+        }
         if (picked != null) {
             val clipboard = LocalClipboardManager.current
-            // Copy keeps the text; Select all takes everything; Paste does what the key row's Paste does.
+            // Copy keeps the text; Select all takes everything; Paste does what the key row's Paste does
+            // (typing: while watching it takes control and the text is held until then). Copy, Select all, Clear never do.
             Row(
                 Modifier.align(Alignment.TopEnd).padding(8.dp).background(Theme.raised, RoundedCornerShape(8.dp)).border(1.dp, Theme.border, RoundedCornerShape(8.dp))
                     .horizontalScroll(rememberScrollState()),

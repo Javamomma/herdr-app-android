@@ -36,6 +36,13 @@ fun u32(n: Int): ByteArray = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIA
 fun resizePayload(cols: Int, rows: Int): ByteArray =
     ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putShort(cols.toShort()).putShort(rows.toShort()).array()
 
+/** The cols and rows of a resize payload, or null when it isn't one. */
+fun sizeOf(payload: ByteArray): Pair<Int, Int>? {
+    if (payload.size != 4) return null
+    val b = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN)
+    return (b.short.toInt() and 0xffff) to (b.short.toInt() and 0xffff)
+}
+
 private fun InputStream.readFully(buf: ByteArray) {
     var at = 0
     while (at < buf.size) {

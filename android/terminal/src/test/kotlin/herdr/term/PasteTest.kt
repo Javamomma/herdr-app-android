@@ -42,3 +42,19 @@ class PasteTest {
         assertEquals("abc" to 3, Clip.insertAt("", 9, 9, "abc"))
     }
 }
+
+class ModesTest {
+    @Test
+    fun a_snapshot_keeps_the_modes_the_wiped_emulator_forgot() {
+        val emu = Emulator(80, 24)
+        emu.write("\u001b[?2004h\u001b[?1h")
+        val saved = Modes.of(emu)
+        assertTrue(saved.bracketedPaste && saved.appCursorKeys)
+        emu.clearAll()
+        assertFalse(emu.bracketedPaste, "the wipe resets the modes")
+        assertFalse(emu.appCursorKeys)
+        assertEquals("\u001b[200~one\rtwo\u001b[201~", Keys.paste("one\ntwo", saved.bracketedPaste), "still one paste")
+        assertEquals("\u001bOA", Keys.encode(Key.UP, Mods(), saved.appCursorKeys))
+        assertEquals("\u001b[A", Keys.encode(Key.UP, Mods(), emu.appCursorKeys), "what a wiped emulator would have sent")
+    }
+}
