@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.SwapVert
@@ -102,6 +103,7 @@ import herdr.core.Space
 import herdr.core.Tab
 import herdr.core.activeChild
 import herdr.core.children
+import herdr.core.drawnPanes
 import herdr.core.find
 import herdr.core.machineOf
 import herdr.core.modName
@@ -182,13 +184,10 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         }
     }
 
-    // What's on screen counts as seen (shared with the desktop as herdr.seen).
     val space = session.spaces.firstOrNull { it.id == session.activeSpace }
     val tab = space?.tabs?.firstOrNull { it.id == session.activeTab[space.id] }
-    LaunchedEffect(tab, session.peek, session.zoomed[tab?.id]) {
-        val shown = tab?.let { t -> session.zoomed[t.id]?.let { z -> listOfNotNull(t.root.find(z)?.terminal) } ?: t.root.panes().mapNotNull { it.terminal } }.orEmpty()
-        session.visible = (shown + listOfNotNull(session.peek)).toSet()
-    }
+    // Nothing on this screen once it leaves (connect screen, app lock): no one is looking.
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { session.visible = emptySet() } }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Theme.bg).safeDrawingPadding()) {
         val wide = maxWidth >= WIDE
@@ -201,6 +200,19 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
         val drawerOpen = drawer.currentValue == DrawerValue.Open
+        // What is really drawn counts as looked at (shared with the desktop as herdr.seen; see herdr.core.Looking).
+        val pane = { n: JsonObject -> herdr.core.Looking.Pane(n.nodeId, n.terminal) }
+        val looking = herdr.core.Looking.panes(herdr.core.Looking.Screen(
+            foreground = session.foreground && session.attended, covered = session.appLocked,
+            dialogOver = settings || snippetsOpen, wide = wide, agentsHome = agentsHome, drawerOpen = drawerOpen,
+            panelOver = panel != null && !wider,
+            allPanes = tab?.root?.panes()?.map(pane).orEmpty(),
+            drawn = tab?.root?.drawnPanes()?.map(pane).orEmpty(),
+            zoomed = tab?.let { t -> session.zoomed[t.id]?.let { z -> t.root.find(z)?.let(pane) } },
+            focused = tab?.let { t -> session.focused[t.id] },
+            peek = session.peek,
+        ))
+        LaunchedEffect(looking) { session.visible = looking }
         // Back closes the panel first when it is on screen: wide hides it (saved, like the button), folded closes the drawer.
         BackHandler(enabled = LeftPanel.backCloses(wide, session.sidebarHidden, drawerOpen)) {
             if (wide) session.updateSidebarHidden(true) else scope.launch { drawer.close() }
@@ -394,25 +406,36 @@ private fun Sidebar(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AgentRow(session: Session, a: Agent, onPicked: () -> Unit) {
     val space = session.spaces.firstOrNull { it.id == a.spaceId }
-    Row(
-        Modifier.fillMaxWidth().clickable { session.showAgent(a); onPicked() }.padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Dot(a.state)
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                listOfNotNull(a.app, if (a.parent != null) "worker" else null).joinToString(" · "),
-                color = Theme.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                listOfNotNull(a.state, space?.let { session.spaceName(it) }, a.title.ifBlank { null }).joinToString(" · "),
-                color = Theme.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-            if (a.state == "blocked") Answers(session, a, compact = true)
+    var menu by remember { mutableStateOf(false) }
+    SwipeReveal(session, a, background = Theme.panel) {
+        Box {
+            Row(
+                Modifier.fillMaxWidth().combinedClickable(onClick = { session.showAgent(a); onPicked() }, onLongClick = { menu = true })
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Dot(a.state)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            listOfNotNull(a.app, if (a.parent != null) "worker" else null).joinToString(" · "),
+                            color = Theme.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (a.pinned) Icon(Icons.Default.PushPin, "Pinned", tint = Theme.dim, modifier = Modifier.padding(start = 4.dp).size(12.dp))
+                    }
+                    Text(
+                        listOfNotNull(a.state, space?.let { session.spaceName(it) }, a.title.ifBlank { null }).joinToString(" · "),
+                        color = Theme.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    if (a.state == "blocked") Answers(session, a, compact = true)
+                }
+            }
+            AgentMenu(session, a, menu) { menu = false }
         }
     }
 }
@@ -904,6 +927,7 @@ private fun Composer(
 
 
 /** The cover screen's front page: every agent, the ones that need you first. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit) {
     val agents = session.agents()
@@ -921,16 +945,22 @@ private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit) {
         }
         items(agents, key = { it.address }) { a ->
             val space = session.spaces.firstOrNull { it.id == a.spaceId }
+            var menu by remember { mutableStateOf(false) }
+            SwipeReveal(session, a, background = Theme.bg, inset = 4.dp) {
+            Box {
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 4.dp).background(Theme.panel, RoundedCornerShape(10.dp))
                     .border(1.dp, if (a.state == "blocked") Theme.stateColor("blocked").copy(alpha = 0.6f) else Theme.border, RoundedCornerShape(10.dp))
-                    .clickable { onOpen(a) }.padding(14.dp),
+                    .combinedClickable(onClick = { onOpen(a) }, onLongClick = { menu = true }).padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Dot(a.state, 10.dp)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(a.app + if (a.parent != null) " · worker" else "", color = Theme.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(a.app + if (a.parent != null) " · worker" else "", color = Theme.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f, fill = false))
+                        if (a.pinned) Icon(Icons.Default.PushPin, "Pinned", tint = Theme.dim, modifier = Modifier.padding(start = 6.dp).size(14.dp))
+                    }
                     Text(a.title.ifBlank { a.state }, color = Theme.dim, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(listOfNotNull(a.state, space?.let { session.spaceName(it) }).joinToString(" · "), color = Theme.stateColor(a.state), fontSize = 12.sp)
                     session.screens[a.address]?.let { screen ->
@@ -953,6 +983,9 @@ private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit) {
                         androidx.compose.material3.TextButton(onClick = { session.allowShown(a.address, q.mark) }) { Text("Allow") }
                     }
                 }
+            }
+            AgentMenu(session, a, menu) { menu = false }
+            }
             }
         }
     }

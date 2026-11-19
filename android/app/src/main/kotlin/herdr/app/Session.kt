@@ -13,7 +13,15 @@ import herdr.app.ssh.Profile
 import herdr.app.ssh.Secrets
 import herdr.app.ssh.SshLink
 import herdr.app.ssh.UnknownHostKey
+import herdr.core.Alerting
 import herdr.core.Axis
+import herdr.core.LabelQueue
+import herdr.core.Labels
+import herdr.core.Mark
+import herdr.core.Pins
+import herdr.core.Seen
+import herdr.core.SeenTerm
+import herdr.core.SeenTracker
 import herdr.core.CoreClient
 import herdr.core.DOC_NAME
 import herdr.core.EventLines
@@ -107,6 +115,12 @@ data class Agent(
     val spaceId: String?,
     val tabId: String?,
     val paneId: String?,
+    /** Core's turn counter (rises each time the agent stops working). */
+    val turn: Long = 0,
+    /** `herdr.pinned` is set: first in every list. */
+    val pinned: Boolean = false,
+    /** What the menu offers: Mark read when unread, else Mark unread (not at turn 0). */
+    val mark: Mark = Mark.NONE,
 )
 
 /** Where a pane lives. */
@@ -224,11 +238,35 @@ class Session(private val context: Context) {
 
     private val docs = HashMap<String, DocSlot>()
     private val writeLocks = HashMap<String, Mutex>()
-    private val writtenSeen = HashMap<String, Long>()
+    private val seenTracker = SeenTracker()
+    /** Bumped when [seenTracker] changes what agents() shows (it is not Compose state). */
+    private var seenRev by mutableIntStateOf(0)
+    private val lastTurns = HashMap<String, Long>()
     private var reconnect: Job? = null
     /** Rises with every connect and disconnect: an attempt that is no longer the latest gives up. */
     private var connecting = 0
-    private var foreground = true
+    private var foregroundState by mutableStateOf(true)
+    val foreground: Boolean get() = foregroundState
+    /** The screen is on and past the keyguard, with the activity resumed (set by MainActivity). */
+    private var attendedState by mutableStateOf(false)
+    var attended: Boolean
+        get() = attendedState
+        set(v) {
+            attendedState = v
+            shareSeen()
+        }
+    /** The app lock is in front (set by MainActivity before anything else on start): nothing behind it is looked at. */
+    private var appLockedState by mutableStateOf(false)
+    var appLocked: Boolean
+        get() = appLockedState
+        set(v) {
+            appLockedState = v
+            shareSeen()
+        }
+    /** Really in front of someone: app in front, screen on and unlocked, no app lock. */
+    private val attending get() = foreground && attended && !appLocked
+    private val labelQueue = LabelQueue()
+    private var trackedHost: String? = null
     var wantConnected = false
         private set
 
@@ -383,6 +421,9 @@ class Session(private val context: Context) {
         reconnect?.cancel()
         core?.close()
         core = null
+        labelQueue.reset()
+        seenTracker.reset()
+        trackedHost = null
         conn = Conn.Idle
     }
 
@@ -419,8 +460,9 @@ class Session(private val context: Context) {
 
     /** The app came to the front or went away: reconnect when back. */
     fun setForeground(front: Boolean) {
-        foreground = front
-        if (front) shareSeen()
+        foregroundState = front
+        if (!front) visible = emptySet()
+        shareSeen()
         if (front && wantConnected && core == null && conn !is Conn.Connecting) {
             conn = Conn.Idle
             connect()
@@ -494,11 +536,20 @@ class Session(private val context: Context) {
             return
         }
         core = client
+        // Another host (or the demo): `t1` there is not `t1` here.
+        val host = if (demo) "demo" else "${profile.user}@${profile.host}:${profile.port}"
+        if (trackedHost != host) {
+            seenTracker.reset()
+            trackedHost = host
+        }
+        labelQueue.reset()
         coreVersion = client.hello["version"].str ?: ""
         client.onLost {
             main.launch {
                 if (core !== client) return@launch
                 core = null
+                labelQueue.reset()
+                seenTracker.connectionLost()
                 conn = Conn.Failed("Lost the connection to the Mac.")
                 scheduleReconnect()
             }
@@ -520,6 +571,7 @@ class Session(private val context: Context) {
 
     private fun setTerminals(live: List<JsonObject>) {
         terminals = live.associateBy { it["address"].str ?: "" }
+        seenTracker.retain(terminals.keys)
         shareSeen()
         noticeAgents()
         saveCache()
@@ -635,12 +687,12 @@ class Session(private val context: Context) {
         val list = agents()
         for (a in list) {
             val prev = lastStates[a.address]
-            val looking = foreground && a.address in visible
+            val looking = attending && a.address in visible
             if (statesKnown && prev != a.state && !looking) {
                 val where = spaces.firstOrNull { it.id == a.spaceId }?.let { spaceName(it) } ?: machineLabel(machineOf(a.address))
                 when {
                     a.state == "blocked" -> onAlert?.invoke(Alert.BLOCKED, a, where)
-                    a.state == "done" && prev == "working" -> onAlert?.invoke(Alert.DONE, a, where)
+                    Alerting.doneIsNews(prev, lastTurns[a.address], a.state, a.turn) -> onAlert?.invoke(Alert.DONE, a, where)
                 }
             }
             if (a.state != "blocked" && a.state != "done") onSettled?.invoke(a.address)
@@ -648,7 +700,8 @@ class Session(private val context: Context) {
         }
         for (gone in lastStates.keys - list.map { it.address }.toSet()) onSettled?.invoke(gone)
         lastStates.clear()
-        list.forEach { lastStates[it.address] = it.state }
+        lastTurns.clear()
+        list.forEach { lastStates[it.address] = it.state; lastTurns[it.address] = it.turn }
         statesKnown = true
         onAgents?.invoke(list)
     }
@@ -828,59 +881,116 @@ class Session(private val context: Context) {
 
     fun machineLabel(machine: String?): String = machine ?: if (demo) "mac-mini (demo)" else profile.host.substringBefore('.').ifEmpty { "Mac" }
 
-    fun agents(): List<Agent> = terminals.values.mapNotNull { t ->
-        val status = t["status"].obj ?: return@mapNotNull null
-        val address = t["address"].str ?: return@mapNotNull null
-        var state = status["state"].str ?: return@mapNotNull null
-        val turn = t["turn"].long ?: 0
-        val seen = maxOf(t["labels"]["herdr.seen"].str?.toLongOrNull() ?: 0, writtenSeen[address] ?: 0)
-        if (state == "done" && seen >= turn && turn > 0) state = "idle"
-        val place = placeOfTerminal(address)
-        val labels = t["labels"]
-        val machine = machineOf(address)
-        Agent(
-            address = address,
-            state = state,
-            app = status["app"].str?.ifEmpty { null } ?: t["foreground"]["name"].str ?: "agent",
-            title = status["title"].str?.ifEmpty { null } ?: status["msg"].str?.ifEmpty { null } ?: t["title"].str ?: "",
-            parent = t["parent"].str?.ifEmpty { null },
-            spaceId = place?.space?.id ?: labels["herdr.space"].str?.let { qualify(it, machine) },
-            tabId = place?.tab?.id ?: labels["herdr.tab"].str?.let { qualify(it, machine) },
-            paneId = place?.pane?.get("id").str,
-        )
-    }.sortedBy { URGENCY.indexOf(it.state).let { i -> if (i < 0) 99 else i } }
+    /** Pinned first, then the ones that need you, in the order the core lists them. */
+    fun agents(): List<Agent> {
+        seenRev // Compose: re-read after a mark or a seen write
+        val list = terminals.values.mapNotNull { t ->
+            val status = t["status"].obj ?: return@mapNotNull null
+            val address = t["address"].str ?: return@mapNotNull null
+            val reported = status["state"].str ?: return@mapNotNull null
+            val turn = t["turn"].long ?: 0
+            val seen = seenTracker.seen(address, Seen.parse(t["labels"][Labels.SEEN].str))
+            val place = placeOfTerminal(address)
+            val labels = t["labels"]
+            val machine = machineOf(address)
+            Agent(
+                address = address,
+                state = Seen.display(reported, turn, seen),
+                app = status["app"].str?.ifEmpty { null } ?: t["foreground"]["name"].str ?: "agent",
+                title = status["title"].str?.ifEmpty { null } ?: status["msg"].str?.ifEmpty { null } ?: t["title"].str ?: "",
+                parent = t["parent"].str?.ifEmpty { null },
+                spaceId = place?.space?.id ?: labels["herdr.space"].str?.let { qualify(it, machine) },
+                tabId = place?.tab?.id ?: labels["herdr.tab"].str?.let { qualify(it, machine) },
+                paneId = place?.pane?.get("id").str,
+                turn = turn,
+                pinned = Pins.isPinned(labels[Labels.PINNED].str),
+                mark = Seen.mark(reported, turn, seen),
+            )
+        }.sortedBy { URGENCY.indexOf(it.state).let { i -> if (i < 0) 99 else i } }
+        return Pins.order(list) { it.pinned }
+    }
 
     fun spaceState(s: Space, agents: List<Agent>): String? =
         agents.filter { it.spaceId == s.id }.map { it.state }.minByOrNull { URGENCY.indexOf(it).let { i -> if (i < 0) 99 else i } }
 
-    /** Terminals on screen right now: their agents count as looked at. */
+    /** Terminals really in front of the person right now (see `Looking`): only these count as looked at. */
     var visible: Set<String> = emptySet()
         set(v) {
             field = v
             shareSeen()
         }
 
-    /** Like the desktop: an agent on screen is seen once per turn, shared as `herdr.seen`. */
+    /**
+     * Shares what is looked at as `herdr.seen` (docs/labels.md): once per turn
+     * while it stays on screen, only to raise it or when it is missing.
+     * Runs without a link too, so leaving a pane is noticed while disconnected.
+     */
     private fun shareSeen() {
-        if (!foreground) return
-        val c = core ?: return
-        for (addr in visible) {
+        val looking = if (attending) visible else emptySet()
+        if (!attending) seenTracker.stopLooking()
+        val terms = HashMap<String, SeenTerm>()
+        for (addr in looking) {
             val t = terminals[addr] ?: continue
             if (t["status"].obj == null) continue
             val turn = t["turn"].long ?: continue
-            val seen = maxOf(t["labels"]["herdr.seen"].str?.toLongOrNull() ?: 0, writtenSeen[addr] ?: 0)
-            if (seen >= turn) continue
-            writtenSeen[addr] = turn
-            main.launch(Dispatchers.IO) {
-                runCatching { c.call("terminal.label", obj("terminal" to addr, "labels" to obj("herdr.seen" to turn.toString()))) }
+            terms[addr] = SeenTerm(turn, Seen.parse(t["labels"][Labels.SEEN].str))
+        }
+        val writes = seenTracker.raises(looking, terms, System.currentTimeMillis(), canWrite = core != null)
+        for ((addr, turn) in writes) writeLabel(addr, Labels.SEEN, turn.toString())
+        if (writes.isNotEmpty()) seenRev++
+    }
+
+    /** One label on one terminal, on any machine (remote addresses look like `mac/t7`): one write at a time, the latest wins. */
+    private fun writeLabel(address: String, key: String, value: String) {
+        labelQueue.submit(address, key, value)?.let { send(it) }
+    }
+
+    private fun send(w: LabelQueue.Send) {
+        val c = core
+        main.launch {
+            val ok = c != null && withContext(Dispatchers.IO) {
+                runCatching { c.call("terminal.label", obj("terminal" to w.address, "labels" to obj(w.key to w.value))) }.isSuccess
+            }
+            val done = labelQueue.done(w, ok)
+            done.next?.let { send(it) }
+            done.failed?.let { v ->
+                if (w.key == Labels.SEEN) {
+                    seenTracker.failed(w.address, v.toLongOrNull() ?: return@let, System.currentTimeMillis())
+                    seenRev++
+                    // Try again once the backoff is over, even if nothing else happens.
+                    launch { delay(SeenTracker.RETRY_MS + 200); shareSeen() }
+                } else {
+                    notice = "Could not change the pin"
+                }
             }
         }
+    }
+
+    /** Pin or unpin: `herdr.pinned=1`, or empty to remove it. */
+    fun setPinned(address: String, pinned: Boolean) {
+        if (core == null) { notice = "Not connected to the Mac"; return }
+        if (terminals[address] == null) return
+        writeLabel(address, Labels.PINNED, Pins.value(pinned))
+    }
+
+    /** Mark read (`herdr.seen=<turn>`) or unread (`<turn - 1>`, not at turn 0), whichever the menu offers. */
+    fun toggleRead(address: String) {
+        if (core == null) { notice = "Not connected to the Mac"; return }
+        val t = terminals[address] ?: return
+        val turn = t["turn"].long ?: 0
+        val label = Seen.parse(t["labels"][Labels.SEEN].str)
+        val reported = t["status"]["state"].str ?: return
+        val m = Seen.mark(reported, turn, seenTracker.seen(address, label))
+        val v = seenTracker.mark(address, m, turn, label, looking = attending && address in visible) ?: return
+        writeLabel(address, Labels.SEEN, v.toString())
+        seenRev++
+        noticeAgents()
     }
 
     // ---- changes ------------------------------------------------------------
 
     private suspend fun spawn(machine: String?, spaceId: String, tabId: String, cwd: String?, argv: List<String>, size: Pair<Int, Int>?): String {
-        val labels = mapOf("herdr.space" to local(spaceId, machine), "herdr.tab" to local(tabId, machine), "herdr.seen" to "0")
+        val labels = mapOf("herdr.space" to local(spaceId, machine), "herdr.tab" to local(tabId, machine), Labels.SEEN to "0")
         val display = Theme.display()
         return try {
             io { it.run(argv, cwd, labels, machine, size?.first, size?.second, display) }

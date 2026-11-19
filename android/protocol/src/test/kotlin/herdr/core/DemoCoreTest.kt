@@ -55,4 +55,32 @@ class DemoCoreTest {
         assertTrue(!core.closed, "the connection survives a finished writer thread")
         core.close()
     }
+
+    @Test
+    fun the_demo_shows_a_pin_and_an_unread_agent_and_takes_label_writes() {
+        val demo = DemoCore()
+        val core = CoreClient.connect(demo.clientInput, demo.clientOutput) { demo.close() }
+        var lines: EventLines? = null
+        core.subscribe { ch, snapshot ->
+            val l = EventLines(snapshot).also { lines = it }
+            object : StreamListener {
+                override fun onData(bytes: ByteArray) { synchronized(l) { l.push(bytes) }; core.credit(ch, bytes.size) }
+                override fun onClosed(reason: JsonElement) {}
+                override fun onLost() {}
+            }
+        }
+        fun label(t: String, key: String): String? = synchronized(lines!!) { lines!!.live() }.first { it["address"].str == t }["labels"][key].str
+        fun await(what: String, ok: () -> Boolean) {
+            val end = System.currentTimeMillis() + 5_000
+            while (!ok() && System.currentTimeMillis() < end) Thread.sleep(20)
+            assertTrue(ok(), what)
+        }
+        assertTrue(Pins.isPinned(label("t4", Labels.PINNED)))
+        assertTrue(Seen.unread("done", 6, Seen.parse(label("t6", Labels.SEEN))))
+        core.call("terminal.label", obj("terminal" to "t6", "labels" to obj(Labels.SEEN to "6")))
+        await("seen written") { label("t6", Labels.SEEN) == "6" }
+        core.call("terminal.label", obj("terminal" to "t4", "labels" to obj(Labels.PINNED to "")))
+        await("unpinned") { label("t4", Labels.PINNED) == null }
+        core.close()
+    }
 }

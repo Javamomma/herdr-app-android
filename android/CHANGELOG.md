@@ -10,7 +10,10 @@
 - Terminal selection bar: Select all (everything, scrollback included; blank lines at the bottom are left out) and Paste, beside Copy and Clear. After a long-press, drag either end of the selection to adjust it.
 - A very large copy is cut to its newest 200,000 characters, and a notice says so, instead of failing on Android's clipboard limit.
 
+- Pin an agent, or mark it read or unread: long-press it in the agents list or on the cover screen, or swipe it to the right to show Pin and Read/Unread. Pinned agents go first in the list, on the cover screen and in the widget. Pins and "seen" are shared with the desktop app and the official mobile app, so an agent you looked at there is not "done" here. There is no swipe-left action.
+
 ### Fixed
+- An agent is only marked seen while it is really on screen with Herdr in front: not when it is hidden by the single-pane cover view, the agents list, the open left panel, settings or Files, or when the app is in the background, behind the app lock, or the screen is off or locked. A "mark unread" made here stays unread until you leave the agent and come back. A "mark unread" is no longer undone while you keep looking at the agent.
 - Multi-line text from the keyboard is sent as one paste instead of line by line.
 - Long-pressing older text in the terminal no longer closes the app.
 - Copy with nothing selected leaves the clipboard alone.
