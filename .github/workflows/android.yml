@@ -75,9 +75,18 @@ jobs:
           apk=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
           apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
           "$apksigner" verify --print-certs "$apk" > "$RUNNER_TEMP/certs.txt"
-          got=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/certs.txt")
-          if [ "$got" != "$EXPECTED" ]; then
-            echo "::error::Release APK certificate is $got, expected $EXPECTED"
+          # Any line format ("Signer #1 certificate SHA-256 digest: <hex>",
+          # "V2 Signer: certificate SHA-256 digest: <hex>"): every digest must match.
+          got=$(grep -iE 'certificate SHA-256 digest:' "$RUNNER_TEMP/certs.txt" \
+            | sed -E 's/.*certificate SHA-256 digest:[[:space:]]*([0-9A-Fa-f]{64}).*/\1/I' \
+            | grep -E '^[0-9A-Fa-f]{64}$' | tr 'A-F' 'a-f' || true)
+          if [ -z "$got" ]; then
+            echo "::error::No certificate SHA-256 digest found in apksigner output"
+            exit 1
+          fi
+          if [ -n "$(printf '%s\n' "$got" | grep -vx "$EXPECTED" || true)" ]; then
+            echo "::error::Release APK certificate(s) do not match the expected $EXPECTED"
+            printf '%s\n' "$got"
             exit 1
           fi
           echo "Release APK certificate SHA-256 matches $EXPECTED"

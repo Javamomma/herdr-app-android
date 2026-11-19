@@ -21,7 +21,9 @@ Check an APK (CI does this and fails on a mismatch):
 $ANDROID_HOME/build-tools/<version>/apksigner verify --print-certs herdr-release.apk
 ```
 
-"Signer #1 certificate SHA-256 digest" must equal the fingerprint above.
+Every "certificate SHA-256 digest:" line (the prefix differs between build-tools
+versions, e.g. "Signer #1 …" or "V2 Signer: …") must equal the fingerprint above;
+CI fails if there is none or any differs.
 
 ## One-time switch from the debug-signed app
 
