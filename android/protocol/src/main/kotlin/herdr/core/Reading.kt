@@ -74,6 +74,14 @@ object Reading {
     }
 
     fun grouped(n: Int): String = String.format(Locale.US, "%,d", n)
+
+    /** The Changes view of a file git does not track yet: every line added, or a note when it is not text or was cut. */
+    fun addedDiff(p: FilePart): String {
+        if (looksBinary(p.text)) return "Binary file, not shown."
+        val body = if (p.text.isEmpty()) "" else p.text.removeSuffix("\n").lines().joinToString("\n") { "+$it" }
+        val note = cutNotice(p) ?: return body
+        return if (body.isEmpty()) note else "$body\n$note"
+    }
 }
 
 /** A run of lines of a file, drawn as one block of text. */

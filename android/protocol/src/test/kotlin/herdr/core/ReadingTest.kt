@@ -96,6 +96,14 @@ class ReadingTest {
         assertEquals("a\r\nb\r", Chunks.join(Chunks.split(text)))
     }
 
+    @Test fun anUntrackedFileShowsAsAddedLines() {
+        assertEquals("+a\n+b", Reading.addedDiff(part(2, 2, "a\nb\n")))
+        assertEquals("", Reading.addedDiff(FilePart("", 1, 0, 0)))
+        assertEquals("Binary file, not shown.", Reading.addedDiff(part(1, 1, "a\u0000b\n")))
+        val cut = Reading.addedDiff(part(1, 5, "a\n"))
+        assertTrue(cut.startsWith("+a\nShowing the first 1 of 5 lines"), cut)
+    }
+
     // ---- last reply --------------------------------------------------------
 
     @Test fun replyIsPlainText() {

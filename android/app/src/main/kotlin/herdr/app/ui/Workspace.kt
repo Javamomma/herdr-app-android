@@ -315,6 +315,7 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
     }
 
     dialog?.let { Dialogs(session, it, onDismiss = { dialog = null }) }
+    ReplySheet(session)
     session.closing?.let { c ->
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { session.closing = null },
@@ -481,6 +482,7 @@ private fun AgentRow(session: Session, a: Agent, onPicked: () -> Unit, nested: B
                         listOfNotNull(a.state, space?.let { session.spaceName(it) }, a.title.ifBlank { null }).joinToString(" · "),
                         color = Theme.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
+                    ReplyExcerpt(session, a, herdr.core.Reply.LIST_LINES, 11, Modifier.padding(top = 2.dp))
                     if (a.state == "blocked") Answers(session, a, compact = true)
                 }
             }
@@ -1076,7 +1078,9 @@ private fun AgentCard(session: Session, a: Agent, onOpen: (Agent) -> Unit, neste
                     }
                     Text(a.title.ifBlank { a.state }, color = Theme.dim, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(listOfNotNull(a.state, space?.let { session.spaceName(it) }).joinToString(" · "), color = Theme.stateColor(a.state), fontSize = 12.sp)
-                    session.screens[a.address]?.let { screen ->
+                    ReplyExcerpt(session, a, herdr.core.Reply.COVER_LINES, 12, Modifier.padding(top = 6.dp))
+                    // The terminal's last lines stand in only for an agent that reported no reply.
+                    session.screens[a.address]?.takeIf { a.reply.isEmpty() }?.let { screen ->
                         val tail = remember(screen) { herdr.core.Prompts.tail(screen, 3) }
                         if (tail.isNotEmpty() && herdr.core.Prompts.choices(screen).isEmpty()) {
                             Text(

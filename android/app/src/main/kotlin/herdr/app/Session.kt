@@ -15,7 +15,10 @@ import herdr.app.ssh.SshLink
 import herdr.app.ssh.UnknownHostKey
 import herdr.core.Alerting
 import herdr.core.Axis
+import herdr.core.FilePart
 import herdr.core.FindItem
+import herdr.core.Reading
+import herdr.core.Reply
 import herdr.core.LabelQueue
 import herdr.core.Labels
 import herdr.core.Mark
@@ -130,6 +133,8 @@ data class Agent(
     val pinned: Boolean = false,
     /** What the menu offers: Mark read when unread, else Mark unread (not at turn 0). */
     val mark: Mark = Mark.NONE,
+    /** The agent's last reply as plain text (the status message it reported; the Mac's helper cuts it at 600), or empty. */
+    val reply: String = "",
 )
 
 /** Where a pane lives. */
@@ -1027,7 +1032,7 @@ class Session(private val context: Context) {
                 address = address,
                 state = Seen.display(reported, turn, seen),
                 app = status["app"].str?.ifEmpty { null } ?: t["foreground"]["name"].str ?: "agent",
-                title = status["title"].str?.ifEmpty { null } ?: status["msg"].str?.ifEmpty { null } ?: t["title"].str ?: "",
+                title = status["title"].str?.ifEmpty { null } ?: t["title"].str ?: "",
                 parent = t["parent"].str?.ifEmpty { null },
                 spaceId = place?.space?.id ?: labels["herdr.space"].str?.let { qualify(it, machine) },
                 tabId = place?.tab?.id ?: labels["herdr.tab"].str?.let { qualify(it, machine) },
@@ -1035,6 +1040,7 @@ class Session(private val context: Context) {
                 turn = turn,
                 pinned = Pins.isPinned(labels[Labels.PINNED].str),
                 mark = Seen.mark(reported, turn, seen),
+                reply = Reply.clean(status["msg"].str),
             )
         }.sortedBy { URGENCY.indexOf(it.state).let { i -> if (i < 0) 99 else i } }
         return Pins.order(list) { it.pinned }
@@ -1413,10 +1419,29 @@ class Session(private val context: Context) {
         return out
     }
 
-    suspend fun readFile(machine: String?, path: String): String {
-        val r = io { it.call("file.read", obj("path" to path, "on" to machine, "limit" to 20_000), timeoutMs = 30_000) }
-        return r["text"].str ?: ""
+    /**
+     * Whole lines of a file from line [offset], at most `Reading.LINE_LIMIT` of them (the core also stops at 8 MB).
+     * Not text throws with `Reading.BINARY_NOTICE`.
+     */
+    suspend fun readFile(machine: String?, path: String, offset: Int = 1): FilePart {
+        val r = try {
+            io { it.call("file.read", obj("path" to path, "on" to machine, "offset" to offset, "limit" to Reading.LINE_LIMIT), timeoutMs = 30_000) }
+        } catch (e: RpcException) {
+            throw IllegalStateException(Reading.errorText(e.kind, e.message), e)
+        }
+        return FilePart.of(r)
     }
+
+    /** Files and Changes wrap long lines (this phone's choice, never shared). */
+    var wrapLines by mutableStateOf(viewPrefs.getBoolean("wrapLines", true))
+        private set
+    fun updateWrapLines(wrap: Boolean) { wrapLines = wrap; viewPrefs.edit().putBoolean("wrapLines", wrap).apply() }
+
+    /** The file viewer's size in sp: the terminal font setting, kept in a readable range. */
+    fun readerFontSp(): Int = viewPrefs.getInt("font", 13).coerceIn(10, 16)
+
+    /** The agent whose full last reply is open in the reader sheet (nothing is attached or shown of its terminal). */
+    var replyOpen by mutableStateOf<String?>(null)
 
     /** Agents found on the Mac's PATH (login shell), for the + menu. */
     suspend fun installedAgents(machine: String?): List<String> = installed(machine, Agents.known.map { it.command })

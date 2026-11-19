@@ -76,8 +76,13 @@ class DemoCore {
         )
     }
 
-    private fun status(state: String, app: String, title: String, kind: String? = null) =
-        obj("state" to state, "app" to app, "title" to title, "msg" to "", "kind" to kind)
+    private fun status(state: String, app: String, title: String, kind: String? = null, msg: String = "") =
+        obj("state" to state, "app" to app, "title" to title, "msg" to msg, "kind" to kind)
+
+    /** A last reply as the Mac's helper reports it: cut at 600 characters. */
+    private val longReply = ("I upgraded the database to Postgres 17 and ran the migration on a copy first. The dump restored in 41 seconds and every check passed. " +
+        "Two things need your eye before this goes live: the connection pool setting max_connections is now 200 in the new config, and the nightly backup job still points at the old data directory, so I left it disabled. " +
+        "The staging run shows no slow queries. If you agree I will schedule the switch for the quiet window tonight and keep the old cluster for a week as a fallback, with the replication slot dropped so it does not fill the disk while it waits for the cut over to finish properly.").take(600)
 
     private fun seed() {
         val home = "/Users/you"
@@ -87,8 +92,8 @@ class DemoCore {
         terminals["t4"] = rec("t4", "codex", "$home/src/website", "codex", status("working", "Codex", "Refactor the nav bar"), turn = 2, seen = 2, space = "sp2", tab = "tb3", pinned = true)
         terminals["t5"] = rec("t5", "claude", "$home/src/website", "claude", status("working", "Claude Code", "Write e2e tests"), turn = 1, seen = 1, parent = "t4", space = "sp2", tab = "tb3")
         // A second helper of the same parent (done, not yet seen: the helpers show open), and a plain shell in another space's second tab.
-        terminals["t8"] = rec("t8", "claude", "$home/src/website", "claude", status("done", "Claude Code", "Review the nav diff"), turn = 3, seen = 2, parent = "t4", space = "sp2", tab = "tb3")
-        terminals["t6"] = rec("t6", "claude", "$home/src/infra", "claude", status("done", "Claude Code", "Upgrade to Postgres 17"), turn = 6, seen = 5, space = "sp3", tab = "tb4")
+        terminals["t8"] = rec("t8", "claude", "$home/src/website", "claude", status("done", "Claude Code", "Review the nav diff", msg = "Reviewed the nav diff. Two small notes: the focus ring is clipped on the mobile menu, and the hover colour is not used anywhere."), turn = 3, seen = 2, parent = "t4", space = "sp2", tab = "tb3")
+        terminals["t6"] = rec("t6", "claude", "$home/src/infra", "claude", status("done", "Claude Code", "Upgrade to Postgres 17", msg = longReply), turn = 6, seen = 5, space = "sp3", tab = "tb4")
         terminals["t10"] = rec("t10", "zsh", "$home/src/infra/logs", "zsh", space = "sp3", tab = "tb5")
         terminals["vps/t9"] = rec("vps/t9", "htop", "/srv/app", "htop", space = "vps/sp9", tab = "vps/tb9")
 

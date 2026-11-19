@@ -169,6 +169,23 @@ From the 2026-11-12 repair build. Read before changing these paths.
   (`AgentTree.expanded`), else folded with "N helpers"; the person's choice is per parent in memory only (`Session.helpersOpen`). Menu and swipe are
   the same rows. Rejected: matching space or tab names (they are shown, not searched), saving fold state, and swiping the pane title bar for
   the next pane (not added: it cannot be checked without the phone and risks the terminal's sideways drags).
+- **Reading** (`Reading`, `Chunks`, `Reply` in `protocol/Reading.kt`, `ui/Reader.kt`, `ui/Panels.kt`, `Session.readFile`): `file.read` takes
+  `offset` and `limit` in **lines** (we ask for 20,000) and the core also stops at 8 MB of whole lines; the reply has `first`, `last`, `lines`,
+  so "cut" is `last < lines` and "Load more" is one more read at `offset = last + 1`, appended (if it does not follow on, the file changed and it
+  reloads). A non-UTF-8 file is the error kind `not_text`; text with NULs or many control characters is also called binary: one notice, no drawing.
+  The text goes into blocks (`Chunks.split`: 200 lines or 8,000 characters, a line is cut only if it alone is over the limit, never inside a
+  surrogate pair) drawn as monospace `Text` inside one `SelectionContainer`. Up to 60,000 characters every block is composed (a plain scrolling
+  `Column`, so Select all reaches everything); above that a `LazyColumn`, because composing a whole big file would freeze, and Compose then selects
+  only what is composed, so "Copy all" (capped by `Clip.limit`) is in the bar. Wrap (default on) is `viewPrefs` `wrapLines`; the font is the
+  terminal's `font` setting held to 10-16 sp. Not measured on a device: the 60,000 limit and the 200-line block are assumptions. The diff uses the
+  same viewer with per-line colours. Rejected: reading binary with `hc exec cat`, splitting the file into several selection containers.
+  **Last reply** is the terminal record's `status.msg` (OSC 7501 `msg`, base64 on the wire, plain text in the record); it used to be only a fallback
+  for the card title and now is `Agent.reply`. The 600-character cut is the Mac helper's (the core's own source has no such cap, and some agents
+  report no message at all, then nothing is shown and the cover card keeps its terminal tail). `Reply.clean` drops control characters and text
+  direction overrides; the text is drawn as `Text` only (never linkified or run). `Reply.excerpt` keeps 4 (cover) or 3 (list) lines and shows
+  "Show all" when it left text out, when the card clips it, or when the reply is 600 characters or more. The sheet (`session.replyOpen`) never
+  attaches or shows a terminal, so it is not "looking" and never takes control. A later build could read the full reply from the agent's
+  transcript (label `claude.transcript` names the file) with `file.read`: not done here, by decision.
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 

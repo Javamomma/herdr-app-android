@@ -2,7 +2,6 @@ package herdr.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -30,10 +28,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,7 +43,11 @@ import androidx.compose.ui.unit.sp
 import herdr.app.Session
 import herdr.app.Theme
 import herdr.app.term.TerminalPool
+import kotlinx.coroutines.launch
+import herdr.core.FilePart
+import herdr.core.Reading
 import herdr.core.machineOf
+import herdr.term.Clip
 
 /** Files or Changes for the focused terminal's folder, read through the core on its machine. */
 @Composable
@@ -123,9 +128,7 @@ private fun Files(session: Session, pool: TerminalPool, machine: String?, start:
     }
     val file = open
     if (file != null) {
-        var text by remember(file) { mutableStateOf<Load<String>>(Load.Busy) }
-        LaunchedEffect(file) { text = runCatching { session.readFile(machine, file) }.fold({ Load.Done(it) }, { Load.Failed(it.message ?: "cannot read") }) }
-        Loaded(text) { CodeView(it.lines()) { Theme.text } }
+        FileViewer(session, machine, file)
         return
     }
     Loaded(list) { entries ->
@@ -164,20 +167,13 @@ private fun Changes(session: Session, machine: String?, cwd: String) {
         LaunchedEffect(file, reload) {
             diff = runCatching {
                 session.exec(machine, listOf("git", "-C", cwd, "diff", "HEAD", "--", file)).ifBlank {
-                    session.readFile(machine, join(cwd, file)).lines().joinToString("\n") { "+$it" }
+                    Reading.addedDiff(session.readFile(machine, join(cwd, file)))
                 }
             }.fold({ Load.Done(it) }, { Load.Failed(it.message ?: "cannot diff") })
         }
+        ViewBar(session, onCopyAll = null, copied = false)
         Loaded(diff) { text ->
-            CodeView(text.lines()) { line ->
-                when {
-                    line.startsWith("+++") || line.startsWith("---") -> Theme.dim
-                    line.startsWith("+") -> Color(0xFF98C379)
-                    line.startsWith("-") -> Color(0xFFE06C75)
-                    line.startsWith("@@") -> Color(0xFF61AFEF)
-                    else -> Theme.text
-                }
-            }
+            TextViewer(text, session.wrapLines, session.readerFontSp(), colorOf = DIFF_COLOURS)
         }
         return
     }
@@ -201,15 +197,61 @@ private fun Changes(session: Session, machine: String?, cwd: String) {
     }
 }
 
+/** The +/- colouring of a diff, per line. */
+private val DIFF_COLOURS: (String) -> Color = { line ->
+    when {
+        line.startsWith("+++") || line.startsWith("---") -> Theme.dim
+        line.startsWith("+") -> Color(0xFF98C379)
+        line.startsWith("-") -> Color(0xFFE06C75)
+        line.startsWith("@@") -> Color(0xFF61AFEF)
+        else -> Theme.text
+    }
+}
+
+/** A file: wrapped (or sideways) monospace text you can select, a notice when the core cut it, "Load more", and no garbage for binary. */
 @Composable
-private fun CodeView(lines: List<String>, color: (String) -> Color) {
-    val h = rememberScrollState()
-    LazyColumn(Modifier.fillMaxSize().background(Theme.bg).horizontalScroll(h)) {
-        items(lines) { line ->
-            Text(
-                line.ifEmpty { " " }, color = color(line), fontSize = 12.sp, fontFamily = FontFamily.Monospace,
-                softWrap = false, modifier = Modifier.padding(horizontal = 10.dp),
-            )
+private fun FileViewer(session: Session, machine: String?, file: String) {
+    var part by remember(file, machine) { mutableStateOf<Load<FilePart>>(Load.Busy) }
+    var more by remember(file, machine) { mutableStateOf<String?>(null) }
+    var loadingMore by remember(file, machine) { mutableStateOf(false) }
+    var restart by remember(file, machine) { mutableIntStateOf(0) }
+    var copied by remember(file, machine) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
+    LaunchedEffect(file, machine, restart) {
+        part = Load.Busy
+        part = runCatching { session.readFile(machine, file) }.fold({ Load.Done(it) }, { Load.Failed(it.message ?: "cannot read") })
+    }
+    val done = (part as? Load.Done)?.value
+    val binary = done != null && Reading.looksBinary(done.text)
+    if (done != null && !binary) ViewBar(session, onCopyAll = { clipboard.setText(AnnotatedString(Clip.limit(done.text).text)); copied = true }, copied = copied)
+    Loaded(part) { p ->
+        if (binary) {
+            Text(Reading.BINARY_NOTICE, color = Theme.dim, fontSize = 13.sp, modifier = Modifier.padding(12.dp))
+            return@Loaded
+        }
+        Column(Modifier.fillMaxSize()) {
+            if (p.text.isEmpty()) Text("Empty file.", color = Theme.dim, fontSize = 13.sp, modifier = Modifier.padding(12.dp))
+            else Box(Modifier.weight(1f)) { TextViewer(p.text, session.wrapLines, session.readerFontSp()) }
+            Reading.cutNotice(p)?.let { notice ->
+                Row(Modifier.fillMaxWidth().background(Theme.panel).padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(more ?: notice, color = Theme.dim, fontSize = 12.sp, modifier = Modifier.weight(1f).padding(vertical = 6.dp))
+                    Reading.nextOffset(p)?.let { next ->
+                        TextButton(enabled = !loadingMore, onClick = {
+                            loadingMore = true
+                            more = null
+                            scope.launch {
+                                val r = runCatching { session.readFile(machine, file, next) }
+                                loadingMore = false
+                                r.onSuccess { m ->
+                                    val joined = Reading.append(p, m)
+                                    if (joined == null) restart++ else part = Load.Done(joined)
+                                }.onFailure { more = "Could not load more: ${it.message}" }
+                            }
+                        }) { Text(if (loadingMore) "Loading…" else "Load more") }
+                    }
+                }
+            }
         }
     }
 }
