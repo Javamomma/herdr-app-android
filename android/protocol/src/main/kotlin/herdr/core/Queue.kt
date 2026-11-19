@@ -76,6 +76,11 @@ object Queue {
     private const val MAX_DETAIL = 2_000
     private const val MAX_FIELD = 200
     private const val MAX_PATH = 4_096
+    const val MAX_URL = 2_048
+    private const val MAX_URL_KEPT = 8_192
+
+    /** A path to open in the file viewer: not blank, not long, no NUL, newline or other control character. */
+    fun validPath(p: String): Boolean = p.isNotBlank() && p.length <= MAX_PATH && p.none { it.isISOControl() }
 
     /**
      * Reads the command's stdout. Unknown fields are ignored; an entry without `id` or `title` is skipped;
@@ -110,8 +115,9 @@ object Queue {
             title = title.take(MAX_TITLE),
             detail = o["detail"].str.orEmpty().take(MAX_DETAIL),
             ageDays = o["age_days"].int(),
-            file = o["file"].str?.takeIf { it.isNotBlank() && it.length <= MAX_PATH && '\u0000' !in it },
-            url = o["url"].str?.trim()?.ifEmpty { null }?.take(MAX_PATH),
+            file = o["file"].str?.takeIf(::validPath),
+            // Kept whole up to a cap; one longer than [MAX_URL] is never opened (it is shown as text), never cut and opened.
+            url = o["url"].str?.trim()?.ifEmpty { null }?.take(MAX_URL_KEPT),
             expiresInDays = o["expires_in_days"].int(),
         )
     }
@@ -121,6 +127,7 @@ object Queue {
     /** Only http and https, with a host and no spaces or control characters; anything else is text. */
     fun openable(url: String): Boolean {
         val u = url.trim()
+        if (u.length > MAX_URL) return false
         if (u.any { it.isWhitespace() || it.isISOControl() }) return false
         val rest = when {
             u.startsWith("https://", ignoreCase = true) -> u.substring(8)
@@ -133,10 +140,22 @@ object Queue {
 
     /** url (http/https only), else file, else the detail text. */
     fun target(item: QueueItem): QueueTarget {
-        item.url?.let { if (openable(it)) return QueueTarget.Url(it.trim()) }
+        item.url?.let { if (openable(it)) return QueueTarget.Url(lowerScheme(it.trim())) }
         item.file?.let { return QueueTarget.File(it) }
         val text = listOfNotNull(item.detail.ifBlank { null }, item.url?.takeIf { !openable(it) }).joinToString("\n")
-        return QueueTarget.Detail(text.ifEmpty { item.title })
+        return QueueTarget.Detail(text.ifEmpty { item.title }.take(MAX_DETAIL))
+    }
+
+    /** Android's browser matching wants the scheme in lower case: HTTPS://x becomes https://x. */
+    private fun lowerScheme(u: String): String { val i = u.indexOf("://"); return u.substring(0, i).lowercase() + u.substring(i) }
+
+    /** What a failed call came to. [connected]: the link to the core is still there. */
+    fun failureOf(e: Throwable, connected: Boolean): QueueFailure = when {
+        e is CoreTimedOutException -> QueueFailure.TimedOut
+        e is CoreLostException -> QueueFailure.NotConnected
+        e is RpcException -> QueueFailure.Other(e.message.orEmpty().lineSequence().firstOrNull().orEmpty().take(200))
+        e is IllegalStateException && !connected -> QueueFailure.NotConnected
+        else -> QueueFailure.Other(e.message.orEmpty().lineSequence().firstOrNull().orEmpty().take(200))
     }
 
     /** The heading: "Queue · 7", or "Queue · nothing waiting". */
@@ -192,4 +211,70 @@ object Queue {
 sealed interface QueueResult {
     data class Loaded(val items: List<QueueItem>) : QueueResult
     data class Failed(val why: QueueFailure) : QueueResult
+}
+
+/** The command being edited in Settings: typing changes only the draft; the saved command changes on Save, and only then can anything run. */
+data class QueueDraft(val saved: String, val text: String = saved) {
+    val dirty get() = text.trim() != saved.trim()
+    fun edit(t: String) = copy(text = t)
+    fun reset() = copy(text = Queue.DEFAULT_COMMAND)
+    /** What Save stores (trimmed; empty turns the Queue off), or null when nothing changed. */
+    fun commit(): String? = if (dirty) text.trim() else null
+}
+
+/**
+ * The queue's state and which refresh may change it. A refresh is a [Ticket]; its answer counts only if it is still the
+ * current one (not cleared or replaced meanwhile) and the core it asked is still the live one, so nothing from a
+ * disconnected, replaced or demo core lands. A cancelled refresh leaves the state alone and does not count as tried.
+ */
+class QueueModel {
+    var state = QueueState()
+        private set
+    private var tried: Long? = null
+    private var nextId = 0L
+    private var current: Long? = null
+
+    class Ticket internal constructor(internal val id: Long, internal val core: Any?, internal val previousTried: Long?)
+
+    /** Starts a refresh, or null when one is running. [core]: the connection it will ask (null when there is none). */
+    fun begin(core: Any?, now: Long): Ticket? {
+        if (current != null) return null
+        val t = Ticket(++nextId, core, tried)
+        current = t.id
+        tried = now
+        state = state.started()
+        return t
+    }
+
+    /** Applies the answer; false when it was dropped (stale ticket, or asked of another core than [liveCore]). */
+    fun finish(t: Ticket, liveCore: Any?, result: QueueResult, now: Long): Boolean {
+        if (current != t.id) return false
+        current = null
+        if (t.core !== liveCore) {
+            state = state.copy(loading = false)
+            tried = t.previousTried
+            return false
+        }
+        state = when (result) {
+            is QueueResult.Loaded -> state.loaded(result.items, now)
+            is QueueResult.Failed -> state.failed(result.why)
+        }
+        return true
+    }
+
+    fun cancelled(t: Ticket) {
+        if (current != t.id) return
+        current = null
+        state = state.copy(loading = false)
+        tried = t.previousTried
+    }
+
+    /** Disconnect, demo, another host or a new command: nothing kept, and any refresh in flight is dropped. */
+    fun clear() {
+        current = null
+        tried = null
+        state = QueueState()
+    }
+
+    fun due(every: Long, now: Long, connected: Boolean) = Queue.due(state, tried, now, every, connected)
 }

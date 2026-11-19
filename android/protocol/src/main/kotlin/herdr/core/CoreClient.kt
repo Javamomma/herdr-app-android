@@ -37,7 +37,10 @@ class RpcException(val error: JsonElement, method: String) :
  * request had already been written, so the core may have acted on it; false
  * when it failed before anything was written.
  */
-class CoreLostException(message: String, val afterWrite: Boolean = false) : Exception(message)
+open class CoreLostException(message: String, val afterWrite: Boolean = false) : Exception(message)
+
+/** The core did not answer in time (the link may be fine). */
+class CoreTimedOutException(message: String) : CoreLostException(message, afterWrite = true)
 
 /** Receives one channel's frames, on the connection's reader thread. */
 interface StreamListener {
@@ -241,7 +244,7 @@ class CoreClient private constructor(
             return future.get(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (e: TimeoutException) {
             replies.remove(id)
-            throw CoreLostException("$method: no reply from core", afterWrite = true)
+            throw CoreTimedOutException("$method: no reply from core")
         } catch (e: ExecutionException) {
             when (val cause = e.cause) {
                 is RpcException -> throw RpcException(cause.error, method)

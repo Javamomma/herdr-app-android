@@ -27,6 +27,7 @@ import herdr.core.CoreLostException
 import herdr.core.Queue
 import herdr.core.QueueFailure
 import herdr.core.QueueResult
+import herdr.core.QueueModel
 import herdr.core.QueueState
 import herdr.core.DOC_NAME
 import herdr.core.EventLines
@@ -235,6 +236,8 @@ class Session(private val context: Context) {
         private set
     /** A file to show in the Files panel (a tapped path in a terminal). */
     var fileToOpen by mutableStateOf<String?>(null)
+    /** [fileToOpen] is an exact path (from the queue): not cut at a colon as a file:line from a terminal is. */
+    var fileExact = false
     /** Showing what was cached from the last connection, not live state. */
     var stale by mutableStateOf(false)
         private set
@@ -333,70 +336,78 @@ class Session(private val context: Context) {
     /** Expanded or folded to one line: this phone's choice. */
     var queueOpen by mutableStateOf(viewPrefs.getBoolean("queueOpen", false))
         private set
-    /** Only in memory: the items are private and are never saved on the phone. */
+    /** Only in memory: the items are private and are never saved on the phone. Cleared on disconnect, demo and a new host. */
     var queue by mutableStateOf(QueueState())
         private set
+    private val queueModel = QueueModel()
     /** A file from the queue is shown on the core's own machine, whatever terminal is focused. */
     var filesLocal by mutableStateOf(false)
-    private var queueTried: Long? = null
 
+    /** Save in Settings: the only way the command changes (and so the only way a new one can run, once, when the list is next on screen). */
     fun updateQueueCommand(command: String) {
         if (command == queueCommand) return
         queueCommand = command
         settings.edit().putString("queueCommand", command).apply()
-        queue = QueueState()
-        queueTried = null
+        clearQueue()
     }
-    fun resetQueueCommand() = updateQueueCommand(Queue.DEFAULT_COMMAND)
     fun updateQueueOpen(open: Boolean) { queueOpen = open; viewPrefs.edit().putBoolean("queueOpen", open).apply() }
 
-    /** Whether the section is due a refresh (never while one runs): [every] ms after the last try. */
-    fun queueDue(every: Long) = queueCommand.isNotBlank() && Queue.due(queue, queueTried, System.currentTimeMillis(), every, conn is Conn.Connected)
+    /** Nothing kept, nothing in flight lands: disconnect, demo, another host, a new command. */
+    private fun clearQueue() {
+        queueModel.clear()
+        queue = queueModel.state
+        filesLocal = false
+    }
 
+    /** Whether the section is due a refresh (never while one runs): [every] ms after the last try. */
+    fun queueDue(every: Long) = queueCommand.isNotBlank() && queueModel.due(every, System.currentTimeMillis(), conn is Conn.Connected)
+
+    /** The Retry / Refresh button: from the person, so it runs even when no refresh is due. */
     fun requestQueueRefresh() { main.launch { refreshQueue() } }
 
-    /** Opens a queue item's file in the file viewer, on the core's machine. */
-    fun openQueueFile(path: String) { filesLocal = true; requested = "file:$path" }
+    /** Opens a queue item's file in the file viewer, on the core's machine, by its exact path. */
+    fun openQueueFile(path: String) {
+        if (!Queue.validPath(path)) return
+        filesLocal = true
+        fileExact = true
+        requested = "queuefile:$path"
+    }
 
     /**
      * Runs the queue command through a shell on the core's own machine (never a remote one) and keeps the last good
-     * list when this try fails. The command is the person's own setting; nothing from an item is ever part of it.
+     * list when this try fails. The command is the saved setting; nothing from an item is ever part of it. The answer
+     * is dropped if the core it was asked from is no longer the connected one.
      */
     suspend fun refreshQueue() {
         val command = queueCommand.trim()
-        if (command.isEmpty() || queue.loading) return
-        queueTried = System.currentTimeMillis()
-        queue = queue.started()
+        if (command.isEmpty()) return
+        val asked = core
+        val ticket = queueModel.begin(asked, System.currentTimeMillis()) ?: return
+        queue = queueModel.state
         val result = try {
-            val r = io { it.call("machine.exec", obj("argv" to listOf("sh", "-c", command)), timeoutMs = Queue.TIMEOUT_MS) }
-            val out = r["stdout"].str ?: ""
-            // base64 is 4/3 of the bytes: past the cap, refuse before decoding.
-            if (out.length > Queue.MAX_OUTPUT_CHARS * 2) QueueResult.Failed(QueueFailure.BadOutput("too much output"))
-            else Queue.outcome(
-                code = r["code"].long,
-                stdout = String(Base64.decode(out, Base64.DEFAULT)),
-                stderr = String(Base64.decode(r["stderr"].str ?: "", Base64.DEFAULT)),
-                timedOut = r["timed_out"].bool == true,
-                truncated = r["truncated"].bool == true,
-            )
+            withContext(Dispatchers.IO) {
+                val c = asked ?: throw IllegalStateException("Not connected to the Mac")
+                val r = c.call("machine.exec", obj("argv" to listOf("sh", "-c", command)), timeoutMs = Queue.TIMEOUT_MS)
+                val out = r["stdout"].str ?: ""
+                // base64 is 4/3 of the bytes: past the cap, refuse before decoding.
+                if (out.length > Queue.MAX_OUTPUT_CHARS * 2) QueueResult.Failed(QueueFailure.BadOutput("too much output"))
+                else Queue.outcome(
+                    code = r["code"].long,
+                    stdout = String(Base64.decode(out, Base64.DEFAULT)),
+                    stderr = String(Base64.decode(r["stderr"].str ?: "", Base64.DEFAULT)),
+                    timedOut = r["timed_out"].bool == true,
+                    truncated = r["truncated"].bool == true,
+                )
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
-            queue = queue.copy(loading = false)
+            queueModel.cancelled(ticket)
+            queue = queueModel.state
             throw e
-        } catch (e: CoreLostException) {
-            QueueResult.Failed(if (core == null) QueueFailure.NotConnected else if (e.afterWrite && e.message?.contains("no reply") == true) QueueFailure.TimedOut else QueueFailure.Other(e.message.orEmpty().take(200)))
-        } catch (e: RpcException) {
-            QueueResult.Failed(QueueFailure.Other(e.message.orEmpty().lineSequence().firstOrNull().orEmpty().take(200)))
-        } catch (e: IllegalStateException) {
-            QueueResult.Failed(QueueFailure.NotConnected)
         } catch (e: Exception) {
-            QueueResult.Failed(QueueFailure.Other(e.message.orEmpty().lineSequence().firstOrNull().orEmpty().take(200)))
+            QueueResult.Failed(Queue.failureOf(e, asked != null && core === asked))
         }
-        // The setting changed while it ran: that answer is for another command.
-        if (command != queueCommand.trim()) { queue = queue.copy(loading = false); return }
-        queue = when (result) {
-            is QueueResult.Loaded -> queue.loaded(result.items, System.currentTimeMillis())
-            is QueueResult.Failed -> queue.failed(result.why)
-        }
+        queueModel.finish(ticket, core, result, System.currentTimeMillis())
+        queue = queueModel.state
     }
 
     private fun loadSnippets(): List<Snippet> {
@@ -422,6 +433,7 @@ class Session(private val context: Context) {
     fun saveProfile(p: Profile, password: String?) {
         p.save(context)
         if (password != null) secrets.put("password", password.ifEmpty { null })
+        if (p.host != profile.host || p.user != profile.user || p.port != profile.port) clearQueue()
         profile = p
     }
 
@@ -475,6 +487,7 @@ class Session(private val context: Context) {
     fun connectDemo() {
         if (demo && (conn is Conn.Connecting || conn is Conn.Connected)) return
         disconnect()
+        clearQueue()
         demo = true
         wantConnected = false
         conn = Conn.Connecting("Starting the demo…")
@@ -496,6 +509,7 @@ class Session(private val context: Context) {
 
     fun disconnect() {
         connecting++
+        clearQueue()
         demo = false
         wantConnected = false
         settings.edit().putBoolean("connected", false).apply()

@@ -161,13 +161,20 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
     // Asked from a notification, the widget, the key bar or the demo.
     LaunchedEffect(session.requested) {
         when (session.requested) {
-            "files", "changes" -> panel = session.requested
+            "files", "changes" -> { session.filesLocal = false; panel = session.requested }
             "agents" -> { panel = null; agentsHome = true }
             "work" -> { panel = null; agentsHome = false }
             "settings" -> settings = true
             "snippets" -> { panel = null; snippetsOpen = true }
             null -> {}
-            else -> if (session.requested!!.startsWith("file:")) {
+            else -> if (session.requested!!.startsWith("queuefile:")) {
+                // From the queue: the exact path, on the core's own machine (Session.openQueueFile set both).
+                session.fileToOpen = session.requested!!.removePrefix("queuefile:")
+                panel = "files"
+            } else if (session.requested!!.startsWith("file:")) {
+                // From a terminal: its machine, and "path:line" is cut at the colon.
+                session.filesLocal = false
+                session.fileExact = false
                 session.fileToOpen = session.requested!!.removePrefix("file:")
                 panel = "files"
             }
@@ -215,6 +222,14 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
             peek = session.peek,
         ))
         LaunchedEffect(looking) { session.visible = looking }
+        // The queue refreshes only while its section is really drawn (never with the drawer shut, or under a dialog).
+        val queueScreen = herdr.core.Looking.Screen(
+            foreground = true, covered = false, dialogOver = settings || snippetsOpen, wide = wide, agentsHome = agentsHome, drawerOpen = drawerOpen,
+            panelOver = panel != null && !wider, panes = emptyList(), zoomed = null, focused = null, peek = session.peek,
+        )
+        val otherDialog = dialog != null || session.closing != null
+        val queueInSidebar = herdr.core.Looking.queueShown(queueScreen, LeftPanel.besideShown(wide, session.sidebarHidden), otherDialog, inAgentsHome = false)
+        val queueInHome = herdr.core.Looking.queueShown(queueScreen, false, otherDialog, inAgentsHome = true)
         // Back closes the panel first when it is on screen: wide hides it (saved, like the button), folded closes the drawer.
         BackHandler(enabled = LeftPanel.backCloses(wide, session.sidebarHidden, drawerOpen)) {
             if (wide) session.updateSidebarHidden(true) else scope.launch { drawer.close() }
@@ -227,6 +242,7 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
                 onRenameSpace = { dialog = DialogKind.RenameSpace(it) },
                 onCloseSpace = { dialog = DialogKind.CloseSpace(it) },
                 onSettings = { settings = true },
+                queueOnScreen = queueInSidebar,
             )
         }
         val main: @Composable () -> Unit = {
@@ -255,7 +271,7 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
                 Row(Modifier.weight(1f)) {
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         if (agentsHome && !wide) {
-                            AgentsHome(session, onOpen = { a -> session.showAgent(a); agentsHome = false }, onQueueOpened = {})
+                            AgentsHome(session, onOpen = { a -> session.showAgent(a); agentsHome = false }, queueOnScreen = queueInHome, onQueueOpened = {})
                         } else if (space == null || tab == null) {
                             Empty(session, onNewSpace = { dialog = DialogKind.NewSpace(null) })
                         } else {
@@ -354,7 +370,7 @@ fun Dot(state: String?, size: Dp = 8.dp) {
 @Composable
 private fun Sidebar(
     session: Session, onPicked: () -> Unit, onNewSpace: (String?) -> Unit, onRenameSpace: (Space) -> Unit,
-    onCloseSpace: (Space) -> Unit, onSettings: () -> Unit,
+    onCloseSpace: (Space) -> Unit, onSettings: () -> Unit, queueOnScreen: Boolean,
 ) {
     val agents = session.agents()
     val groups: List<String?> = listOf<String?>(null) + session.machines.map { it.name }.sorted()
@@ -402,7 +418,7 @@ private fun Sidebar(
         }
         item(key = "queue") {
             HorizontalDivider(Modifier.padding(top = 12.dp), color = Theme.border)
-            QueueSection(session, onOpened = onPicked)
+            QueueSection(session, onScreen = queueOnScreen, onOpened = onPicked)
         }
         item {
             HorizontalDivider(Modifier.padding(bottom = 12.dp), color = Theme.border)
@@ -958,7 +974,7 @@ private fun Composer(
 /** The cover screen's front page: every agent, the ones that need you first. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit, onQueueOpened: () -> Unit) {
+private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit, queueOnScreen: Boolean, onQueueOpened: () -> Unit) {
     val agents = session.agents()
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         item {
@@ -972,7 +988,7 @@ private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit, onQueueOpened:
                 color = Theme.text, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(4.dp, 4.dp, 4.dp, 12.dp),
             )
         }
-        item(key = "queue") { QueueSection(session, onOpened = onQueueOpened, modifier = Modifier.padding(bottom = 8.dp)) }
+        item(key = "queue") { QueueSection(session, onScreen = queueOnScreen, onOpened = onQueueOpened, modifier = Modifier.padding(bottom = 8.dp)) }
         items(agents, key = { it.address }) { a ->
             val space = session.spaces.firstOrNull { it.id == a.spaceId }
             var menu by remember { mutableStateOf(false) }

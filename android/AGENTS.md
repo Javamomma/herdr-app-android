@@ -140,7 +140,7 @@ From the 2026-11-12 repair build. Read before changing these paths.
   the in-app Files panel on the core's machine (`Session.filesLocal`), never an intent; nothing from an item is sent to a
   terminal or run, and `verbs` are ignored (actions come later). Items are only in memory, never saved. Refresh: on
   coming on screen (unless tried in the last 30 s), then every 3 minutes, only while composed and the activity is RESUMED;
-  a failure keeps the last list, stale. Rejected: another source, background refresh or notifications, `$SHELL -lc`.
+  a failure keeps the last list, stale. The Settings field edits a draft (`QueueDraft`); only Save changes the command, so nothing half-typed runs. The refresh runs only while the section is drawn (`Looking.queueShown`: drawer open / wide panel / agents home, no dialog, app resumed). `QueueModel` drops answers from a cleared state or another core (cleared on disconnect, demo, new host); a cancelled refresh is not a try. Queue files open by exact path in Files on the core's machine with no terminal action (`filesLocal`, `fileExact`). Rejected: another source, background refresh or notifications, `$SHELL -lc`.
 - **Attach a photo** (`Attach` in `protocol/`, `AttachPath` in `terminal/`, `Photos.kt`, `ui/Attach.kt`, `Session.attachPhoto`):
   the core's `terminal.put` (`terminal`, `name`, `data` base64, at most 8 MB raw; reply `path`, `bytes`) writes to a folder of its own
   beside the terminal on the terminal's machine (removed with the terminal), so nothing lands in a project's `git status`; the
