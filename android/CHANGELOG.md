@@ -15,7 +15,7 @@
 - Attach a photo or screenshot: the 📎 button beside Paste opens Android's photo picker (no storage permission), and Herdr is also a share target, so sharing a screenshot from another app asks which agent it is for (the last one you opened is preselected). The photo is shrunk first (longest side 2000 px, JPEG at 85 quality; screenshots stay PNG unless that is much bigger; location data is dropped), uploaded to the agent's terminal on the Mac (works for remote machines too), and its path is put into your message at the cursor. Nothing is sent until you press Send. Needs herdr-core 0.1.21 or newer.
 
 ### Fixed
-- An agent is only marked seen while it is really on screen with Herdr in front: not when it is hidden by the single-pane cover view, the agents list, the open left panel, settings or Files, or when the app is in the background or the screen is off. A "mark unread" is no longer undone while you keep looking at the agent.
+- An agent is only marked seen while it is really on screen with Herdr in front: not when it is hidden by the single-pane cover view, the agents list, the open left panel, settings or Files, or when the app is in the background, behind the app lock, or the screen is off or locked. A "mark unread" made here stays unread until you leave the agent and come back. A "mark unread" is no longer undone while you keep looking at the agent.
 - Multi-line text from the keyboard is sent as one paste instead of line by line.
 - Long-pressing older text in the terminal no longer closes the app.
 - Copy with nothing selected leaves the clipboard alone.

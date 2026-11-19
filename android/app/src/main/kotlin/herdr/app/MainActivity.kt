@@ -5,7 +5,12 @@ import android.content.Intent
 import android.net.Uri
 import herdr.core.Attach
 import android.os.Build
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
 import android.os.Bundle
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.compose.setContent
@@ -29,7 +34,14 @@ class MainActivity : FragmentActivity() {
     private val app get() = application as HerdrApplication
     private val session get() = app.session
     /** The app lock is showing (fingerprint, face or PIN to get in). */
-    private var locked by mutableStateOf(false)
+    private var lockedState by mutableStateOf(false)
+    /** Every change goes to the session too: nothing behind the lock is looked at. */
+    private var locked: Boolean
+        get() = lockedState
+        set(v) {
+            lockedState = v
+            session.appLocked = v
+        }
     private var backgroundedAt = 0L
     private var prompting = false
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -99,16 +111,44 @@ class MainActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
-        session.setForeground(true)
+        // The lock comes first: opening a locked app must not count as looking at what is behind it.
         val away = SystemClock.elapsedRealtime() - backgroundedAt
         if (session.lockEnabled && backgroundedAt > 0 && away > session.lockAfterMinutes * 60_000L) locked = true
+        session.setForeground(true)
         if (locked) unlock()
+        registerReceiver(screenReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_SCREEN_ON); addAction(Intent.ACTION_USER_PRESENT)
+        })
         app.keepWatching()
+    }
+
+    /** Screen on, past the keyguard (not showing a lock screen over us). */
+    private fun attendedNow(): Boolean {
+        val power = getSystemService(POWER_SERVICE) as PowerManager
+        val keys = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
+        return power.isInteractive && !keys.isKeyguardLocked
+    }
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            session.attended = if (intent.action == Intent.ACTION_SCREEN_OFF) false else attendedNow()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        session.attended = attendedNow()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        session.attended = false
     }
 
     override fun onStop() {
         super.onStop()
         backgroundedAt = SystemClock.elapsedRealtime()
+        runCatching { unregisterReceiver(screenReceiver) }
         session.setForeground(false)
     }
 

@@ -105,6 +105,7 @@ import herdr.core.Space
 import herdr.core.Tab
 import herdr.core.activeChild
 import herdr.core.children
+import herdr.core.drawnPanes
 import herdr.core.find
 import herdr.core.machineOf
 import herdr.core.modName
@@ -202,12 +203,15 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         val scope = rememberCoroutineScope()
         val drawerOpen = drawer.currentValue == DrawerValue.Open
         // What is really drawn counts as looked at (shared with the desktop as herdr.seen; see herdr.core.Looking).
+        val pane = { n: JsonObject -> herdr.core.Looking.Pane(n.nodeId, n.terminal) }
         val looking = herdr.core.Looking.panes(herdr.core.Looking.Screen(
-            foreground = true, covered = false, dialogOver = settings || snippetsOpen, wide = wide, agentsHome = agentsHome, drawerOpen = drawerOpen,
+            foreground = session.foreground && session.attended, covered = session.appLocked,
+            dialogOver = settings || snippetsOpen, wide = wide, agentsHome = agentsHome, drawerOpen = drawerOpen,
             panelOver = panel != null && !wider,
-            panes = tab?.root?.panes()?.mapNotNull { it.terminal }.orEmpty(),
-            zoomed = tab?.let { t -> session.zoomed[t.id]?.let { z -> t.root.find(z)?.terminal } },
-            focused = tab?.let { t -> t.root.panes().firstOrNull { it.nodeId == session.focused[t.id] }?.terminal },
+            allPanes = tab?.root?.panes()?.map(pane).orEmpty(),
+            drawn = tab?.root?.drawnPanes()?.map(pane).orEmpty(),
+            zoomed = tab?.let { t -> session.zoomed[t.id]?.let { z -> t.root.find(z)?.let(pane) } },
+            focused = tab?.let { t -> session.focused[t.id] },
             peek = session.peek,
         ))
         LaunchedEffect(looking) { session.visible = looking }
