@@ -92,14 +92,14 @@ reconnects by itself when you switch networks.
    echo 'ssh-ed25519 AAAA… herdr-android' >> ~/.ssh/authorized_keys
    chmod 600 ~/.ssh/authorized_keys
    ```
-   Or use your Mac password (stored encrypted on the phone).
+   The app has no password sign-in: it only logs in with this key.
 3. Check the host key fingerprint against the Mac's
    (`for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$f"; done`).
 
 | Problem | Fix |
 |---|---|
 | "Can't reach …" | Same network or Tailscale? Remote Login on? Mac awake? |
-| "The Mac refused this phone's key" | Check `~/.ssh/authorized_keys`, or use the password. |
+| "The Mac refused this phone's key" | Add the phone's public key (Copy key, on the connect screen) to `~/.ssh/authorized_keys`. |
 | "No hello … command not found: hc" | `which hc` on the Mac, then add its folder to the command under **Advanced**. |
 | "herdr-core … too old" | `hc update` on the Mac. |
 

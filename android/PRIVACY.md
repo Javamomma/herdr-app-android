@@ -9,7 +9,7 @@ your Mac.
 
 **Kept on the phone**
 - The Mac's address, user name and port.
-- The phone's own SSH key and, if you chose it, your Mac password: encrypted
+- The phone's own SSH key (the app never asks for or stores a password): encrypted
   with a key held by the Android Keystore, never sent anywhere but the SSH
   login.
 - The Mac's host key fingerprint, your saved commands, view and settings.

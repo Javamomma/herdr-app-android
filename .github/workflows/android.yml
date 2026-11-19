@@ -39,3 +39,63 @@ jobs:
           name: herdr-android-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+      # Release-signed APK: only where the secrets exist (pushes and same-repo
+      # pull requests; forks get none). The keystore lives in RUNNER_TEMP, not
+      # the workspace, and is deleted at the end. Secrets are only in step env.
+      - name: Check for signing secrets
+        id: signing
+        env:
+          HAVE_KEYSTORE: ${{ secrets.HERDR_KEYSTORE_B64 != '' && secrets.HERDR_KEYSTORE_PASSWORD != '' && secrets.HERDR_KEY_ALIAS != '' }}
+        run: |
+          if [ "$HAVE_KEYSTORE" = "true" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Signing secrets are not available here (fork or not set): skipping the release-signed APK."
+          fi
+      - name: Decode the release keystore
+        if: steps.signing.outputs.available == 'true'
+        env:
+          KEYSTORE_B64: ${{ secrets.HERDR_KEYSTORE_B64 }}
+        run: |
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/herdr-release.p12"
+          echo "HERDR_KEYSTORE=$RUNNER_TEMP/herdr-release.p12" >> "$GITHUB_ENV"
+      - name: Build the release APK
+        if: steps.signing.outputs.available == 'true'
+        env:
+          HERDR_KEYSTORE_PASSWORD: ${{ secrets.HERDR_KEYSTORE_PASSWORD }}
+          HERDR_KEY_ALIAS: ${{ secrets.HERDR_KEY_ALIAS }}
+        run: ./gradlew --no-daemon :app:assembleRelease
+      - name: Verify the release APK is signed with the release key
+        if: steps.signing.outputs.available == 'true'
+        env:
+          EXPECTED: e77aa4e4df4f58d5b98ee736bbe7a1318c1b1381e742ecedca616a7e0166cbed
+        run: |
+          apk=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
+          "$apksigner" verify --print-certs "$apk" > "$RUNNER_TEMP/certs.txt"
+          # Any line format ("Signer #1 certificate SHA-256 digest: <hex>",
+          # "V2 Signer: certificate SHA-256 digest: <hex>"): every digest must match.
+          got=$(grep -iE 'certificate SHA-256 digest:' "$RUNNER_TEMP/certs.txt" \
+            | sed -E 's/.*certificate SHA-256 digest:[[:space:]]*([0-9A-Fa-f]{64}).*/\1/I' \
+            | grep -E '^[0-9A-Fa-f]{64}$' | tr 'A-F' 'a-f' || true)
+          if [ -z "$got" ]; then
+            echo "::error::No certificate SHA-256 digest found in apksigner output"
+            exit 1
+          fi
+          if [ -n "$(printf '%s\n' "$got" | grep -vx "$EXPECTED" || true)" ]; then
+            echo "::error::Release APK certificate(s) do not match the expected $EXPECTED"
+            printf '%s\n' "$got"
+            exit 1
+          fi
+          echo "Release APK certificate SHA-256 matches $EXPECTED"
+      - uses: actions/upload-artifact@v5
+        if: steps.signing.outputs.available == 'true'
+        with:
+          name: herdr-android-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+      - name: Delete the release keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/herdr-release.p12"

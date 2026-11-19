@@ -21,7 +21,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -39,7 +38,6 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import herdr.app.Conn
@@ -54,8 +52,6 @@ fun ConnectScreen(session: Session, onDone: (() -> Unit)? = null) {
     var host by remember { mutableStateOf(p.host) }
     var port by remember { mutableStateOf(p.port.toString()) }
     var user by remember { mutableStateOf(p.user) }
-    var auth by remember { mutableStateOf(p.auth) }
-    var password by remember { mutableStateOf(session.secrets.get("password") ?: "") }
     var command by remember { mutableStateOf(p.command) }
     var advanced by remember { mutableStateOf(false) }
     val conn = session.conn
@@ -64,7 +60,7 @@ fun ConnectScreen(session: Session, onDone: (() -> Unit)? = null) {
     val publicKey = remember { runCatching { session.deviceKey.publicKey() }.getOrElse { "(cannot make a key: ${it.message})" } }
 
     fun connect(accept: String? = null) {
-        session.saveProfile(Profile(host.trim(), port.toIntOrNull() ?: 22, user.trim(), auth, command), if (auth == "password") password else null)
+        session.saveProfile(Profile(host.trim(), port.toIntOrNull() ?: 22, user.trim(), herdr.core.Login.KEY, command))
         session.disconnect()
         session.connect(accept)
         onDone?.invoke()
@@ -85,12 +81,8 @@ fun ConnectScreen(session: Session, onDone: (() -> Unit)? = null) {
                 Box(Modifier.weight(2f)) { Field("Mac user name", user, { user = it }, "what `whoami` prints on the Mac") }
                 Box(Modifier.weight(1f)) { Field("Port", port, { port = it.filter(Char::isDigit) }, null, KeyboardType.Number) }
             }
-            Text("Sign in with", color = Theme.text, fontSize = 14.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = auth == "key", onClick = { auth = "key" }, label = { Text("This phone's key") })
-                FilterChip(selected = auth == "password", onClick = { auth = "password" }, label = { Text("Password") })
-            }
-            if (auth == "key") {
+            Text("Sign in with this phone's key", color = Theme.text, fontSize = 14.sp)
+            run {
                 Text("Add this key to ~/.ssh/authorized_keys on the Mac:", color = Theme.dim, fontSize = 13.sp)
                 Text(
                     publicKey, color = Theme.text, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
@@ -107,8 +99,6 @@ fun ConnectScreen(session: Session, onDone: (() -> Unit)? = null) {
                     "On the Mac: echo '<the key>' >> ~/.ssh/authorized_keys",
                     color = Theme.dim, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
                 )
-            } else {
-                Field("Password", password, { password = it }, "kept encrypted on this phone", KeyboardType.Password, secret = true)
             }
             TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "Hide advanced" else "Advanced") }
             if (advanced) {
@@ -176,13 +166,12 @@ private fun Help() {
 @Composable
 fun Field(
     label: String, value: String, onChange: (String) -> Unit, hint: String?, type: KeyboardType = KeyboardType.Text,
-    secret: Boolean = false, mono: Boolean = false,
+    mono: Boolean = false,
 ) {
     OutlinedTextField(
         value = value, onValueChange = onChange, label = { Text(label) },
         placeholder = hint?.let { { Text(it, fontSize = 13.sp) } },
         singleLine = !mono,
-        visualTransformation = if (secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         keyboardOptions = KeyboardOptions(keyboardType = type, autoCorrectEnabled = false),
         textStyle = androidx.compose.ui.text.TextStyle(fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default, fontSize = if (mono) 12.sp else 16.sp),
         modifier = Modifier.fillMaxWidth(),
