@@ -108,6 +108,17 @@ From the 2026-11-12 repair build. Read before changing these paths.
   (200,000 characters, ~400 KB as UTF-16, under Android's ~1 MB transaction limit), keeping
   the newest text, with a notice. Bar Paste and key-row Paste share `clipboardText`; the key
   row still pastes into the draft only while the message box has focus.
+- **Pins and seen** (`Seen.kt` in `protocol/`: `Seen`, `SeenTracker`, `Pins`, `Looking`, `Alerting`; `docs/labels.md`
+  at the repo root is the contract): labels `herdr.seen=<turn>` and `herdr.pinned=1` (unpin writes it empty) are
+  written with `terminal.label`, the same call for local and remote (`mac/t7`) terminals. Shown state: blocked/error/
+  working as reported, else done when `turn > seen`, else idle; no label keeps the reported state. `seen` is written
+  only for panes really drawn with the app in front (`Looking.panes`; `Workspace` passes the layout mode), once per
+  turn (the decision is taken the first time a turn is on screen, so a later "mark unread" is not overruled), only
+  to raise it or when missing; leaving the screen forgets the decision. Our own writes show at once
+  (`SeenTracker.seen`) until the core's label changes. Mark unread writes `turn - 1`, never at turn 0. Menu: long-press;
+  swipe right reveals Pin and Read/Unread; nothing on a left swipe (it only closes an open row). Alerts say "done" when
+  the turn rose or the agent was working (`Alerting`), so a mark unread elsewhere is not news. Rejected: marking the
+  whole tab seen (the old bug), and rewriting seen on every update.
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 

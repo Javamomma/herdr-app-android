@@ -60,12 +60,13 @@ class DemoCore {
 
     // ---- sample world -------------------------------------------------------
 
-    private fun rec(address: String, title: String, cwd: String, fg: String, status: JsonObject? = null, turn: Int = 0, seen: Int = 0, parent: String? = null, space: String? = null, tab: String? = null): JsonObject {
+    private fun rec(address: String, title: String, cwd: String, fg: String, status: JsonObject? = null, turn: Int = 0, seen: Int = 0, parent: String? = null, space: String? = null, tab: String? = null, pinned: Boolean = false): JsonObject {
         val machine = machineOf(address)
         val labels = buildMap {
             if (space != null) put("herdr.space", local(space, machine))
             if (tab != null) put("herdr.tab", local(tab, machine))
-            put("herdr.seen", seen.toString())
+            put(Labels.SEEN, seen.toString())
+            if (pinned) put(Labels.PINNED, Pins.value(true))
         }
         return obj(
             "address" to address, "state" to "live", "title" to title, "cwd" to cwd, "labels" to labels,
@@ -83,7 +84,7 @@ class DemoCore {
         terminals["t1"] = rec("t1", "claude", "$home/src/herdr-android", "claude", status("blocked", "Claude Code", "Edit app/Session.kt", "permission"), turn = 4, seen = 3, space = "sp1", tab = "tb1")
         terminals["t2"] = rec("t2", "zsh", "$home/src/herdr-android", "zsh", space = "sp1", tab = "tb1")
         terminals["t3"] = rec("t3", "gradle", "$home/src/herdr-android", "java", space = "sp1", tab = "tb1")
-        terminals["t4"] = rec("t4", "codex", "$home/src/website", "codex", status("working", "Codex", "Refactor the nav bar"), turn = 2, seen = 2, space = "sp2", tab = "tb3")
+        terminals["t4"] = rec("t4", "codex", "$home/src/website", "codex", status("working", "Codex", "Refactor the nav bar"), turn = 2, seen = 2, space = "sp2", tab = "tb3", pinned = true)
         terminals["t5"] = rec("t5", "claude", "$home/src/website", "claude", status("working", "Claude Code", "Write e2e tests"), turn = 1, seen = 1, parent = "t4", space = "sp2", tab = "tb3")
         terminals["t6"] = rec("t6", "claude", "$home/src/infra", "claude", status("done", "Claude Code", "Upgrade to Postgres 17"), turn = 6, seen = 5, space = "sp3", tab = "tb4")
         terminals["vps/t9"] = rec("vps/t9", "htop", "/srv/app", "htop", space = "vps/sp9", tab = "vps/tb9")
@@ -313,7 +314,9 @@ class DemoCore {
             "terminal.label" -> {
                 val t = p["terminal"].str ?: ""
                 terminals[t]?.let { r ->
-                    val labels = (r["labels"].obj ?: obj()).with(*(p["labels"].obj ?: obj()).entries.map { it.key to it.value }.toTypedArray())
+                    // Like the core: an empty value removes the label.
+                    val merged = (r["labels"].obj ?: obj()).with(*(p["labels"].obj ?: obj()).entries.map { it.key to it.value }.toTypedArray())
+                    val labels = JsonObject(merged.filterValues { (it as? kotlinx.serialization.json.JsonPrimitive)?.content != "" })
                     terminals[t] = r.with("labels" to labels)
                     event("labels", t, obj("labels" to labels))
                 }
