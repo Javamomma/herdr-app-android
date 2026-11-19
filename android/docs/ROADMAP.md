@@ -74,10 +74,12 @@ herdr socket API, not herdr-core. Their ideas were borrowed in 0.2.0.
    not load state. Actions come later, one family at a time.
 4. **Attach a photo** (built, awaiting phone checks): 📎 by the Type box (Android photo picker) and a Share target;
    shrunk, uploaded with core `terminal.put`, path inserted into the draft. Needs core 0.1.21.
-5. Small reading and reply improvements (wrapped, selectable file viewer;
+5. **Find and helper nesting** (built, awaiting phone checks): a search button on the agents list finds any terminal of the
+   core by name, title, folder and machine and jumps to it; helpers (terminals with a `parent`) nest under their agent.
+6. Small reading and reply improvements (wrapped, selectable file viewer;
    last reply on agent cards; the helper that supplies the last reply cuts it
    at 600 characters, so show it as an excerpt with a way to fetch the rest).
-6. A private release signing key, and trying the CI build on the phone
+7. A private release signing key, and trying the CI build on the phone
    without the cable.
 
 Considered and rejected (audit 2026-11-12): public release on F-Droid or

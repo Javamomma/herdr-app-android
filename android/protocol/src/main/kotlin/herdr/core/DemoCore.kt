@@ -86,7 +86,10 @@ class DemoCore {
         terminals["t3"] = rec("t3", "gradle", "$home/src/herdr-android", "java", space = "sp1", tab = "tb1")
         terminals["t4"] = rec("t4", "codex", "$home/src/website", "codex", status("working", "Codex", "Refactor the nav bar"), turn = 2, seen = 2, space = "sp2", tab = "tb3", pinned = true)
         terminals["t5"] = rec("t5", "claude", "$home/src/website", "claude", status("working", "Claude Code", "Write e2e tests"), turn = 1, seen = 1, parent = "t4", space = "sp2", tab = "tb3")
+        // A second helper of the same parent (done, not yet seen: the helpers show open), and a plain shell in another space's second tab.
+        terminals["t8"] = rec("t8", "claude", "$home/src/website", "claude", status("done", "Claude Code", "Review the nav diff"), turn = 3, seen = 2, parent = "t4", space = "sp2", tab = "tb3")
         terminals["t6"] = rec("t6", "claude", "$home/src/infra", "claude", status("done", "Claude Code", "Upgrade to Postgres 17"), turn = 6, seen = 5, space = "sp3", tab = "tb4")
+        terminals["t10"] = rec("t10", "zsh", "$home/src/infra/logs", "zsh", space = "sp3", tab = "tb5")
         terminals["vps/t9"] = rec("vps/t9", "htop", "/srv/app", "htop", space = "vps/sp9", tab = "vps/tb9")
 
         fun pane(id: String, t: String, w: Double? = null) = terminalPane(id, t).let { if (w != null) it.withWeight(w) else it }
@@ -104,6 +107,7 @@ class DemoCore {
             )),
             obj("id" to "sp3", "name" to "infra", "folder" to "$home/src/infra", "tabs" to listOf(
                 obj("id" to "tb4", "name" to "", "root" to container("tb4", Axis.Row, listOf(pane("p5", "t6")))),
+                obj("id" to "tb5", "name" to "logs", "root" to container("tb5", Axis.Row, listOf(pane("p10", "t10")))),
             )),
         ))
         docs[""] = mac to 3
@@ -169,6 +173,7 @@ class DemoCore {
                 "${c}•$r Started a worker for the e2e tests",
                 "", "$y⠋$r Working (1m 12s · esc to interrupt)",
             ).joinToString("\r\n")
+            "t8" -> "$dim> Review the nav diff$r\r\n\r\nLooks fine. One nit in NavMenu.tsx."
             "t5" -> "$dim> Write e2e tests for the new nav$r\r\n\r\n$y⠙$r Running playwright…"
             "t6" -> listOf(
                 "$dim> Upgrade the database to Postgres 17$r", "",

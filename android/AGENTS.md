@@ -156,6 +156,19 @@ From the 2026-11-12 repair build. Read before changing these paths.
   it is a core call and a draft edit. A share arriving locked waits (the chooser is drawn only inside the unlocked app); not connected: notice
   and the picture is dropped; the chooser preselects the last agent opened (`Session.lastAgent`), else the one in view, else the first. The temp
   file in `cache/attach` is deleted after every upload and at start. Rejected: sending the picture on, writing it through `machine.exec`.
+- **Find and helpers** (`Find`, `AgentTree` in `protocol/Find.kt`, `ui/FindPanel.kt`, `Session.findItems`/`showTerminal`/`helpersOpen`): the
+  search button (agents list in the left panel, and the cover screen's list) replaces the list with `FindPanel`; it searches every live terminal of
+  the core (`Session.terminals`: agents and plain shells, all spaces and tabs, all machines), not only agents. Every typed word must be found
+  in name, title, folder or machine (case-insensitive); ranking per word: name prefix, name, title, folder, machine, ties in the usual order;
+  empty query = everything, pinned first. A result shows its `space › tab` (`Find.where`; "no tab" for a terminal without a pane). Tap = `showTerminal`:
+  the pane's space and tab with focus, else its parent's tab and a peek (the same "Keep as tab" path), then the search closes; Back or the clear
+  button (when empty, closes) too. A pull-down to open was left out (it would fight list scrolling and the Queue). Helpers: the terminal record's
+  `parent` (the old flat "worker" tag was `parent != null`, still shown for a helper whose parent is not in the list). `AgentTree.build` groups the
+  agents (already pinned/urgency ordered) under the top ancestor (one visual level), cycles end at their first member, an unpinned parent rises
+  to its most urgent helper, a pinned helper never lifts it into the pinned rows. Open by default when any helper is blocked, error or done-unread
+  (`AgentTree.expanded`), else folded with "N helpers"; the person's choice is per parent in memory only (`Session.helpersOpen`). Menu and swipe are
+  the same rows. Rejected: matching space or tab names (they are shown, not searched), saving fold state, and swiping the pane title bar for
+  the next pane (not added: it cannot be checked without the phone and risks the terminal's sideways drags).
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 

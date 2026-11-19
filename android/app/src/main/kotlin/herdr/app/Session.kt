@@ -15,6 +15,7 @@ import herdr.app.ssh.SshLink
 import herdr.app.ssh.UnknownHostKey
 import herdr.core.Alerting
 import herdr.core.Axis
+import herdr.core.FindItem
 import herdr.core.LabelQueue
 import herdr.core.Labels
 import herdr.core.Mark
@@ -942,16 +943,50 @@ class Session(private val context: Context) {
     }
 
     /** Opens what an agent runs in: its pane, else its parent's tab with a peek. */
-    fun showAgent(a: Agent) {
-        val place = placeOfTerminal(a.address)
+    fun showAgent(a: Agent) = showTerminal(a.address, a.parent)
+
+    /** Opens a terminal: switches to its space and tab and focuses its pane; without a pane, its parent's tab with a peek (Keep as tab). */
+    fun showTerminal(address: String, parent: String? = null) {
+        val place = placeOfTerminal(address)
         if (place != null) {
             showTab(place.space.id, place.tab.id)
             focused[place.tab.id] = place.pane["id"].str ?: ""
             peek = null
         } else {
-            a.parent?.let { placeOfTerminal(it) }?.let { showTab(it.space.id, it.tab.id) }
-            peek = a.address
+            val tabOf = parent ?: terminals[address]["parent"].str?.ifEmpty { null }
+            tabOf?.let { placeOfTerminal(it) }?.let { showTab(it.space.id, it.tab.id) }
+            peek = address
         }
+    }
+
+    /** Helpers shown open or closed by the person, per parent address. Only in memory. */
+    val helpersOpen = androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
+
+    /** Every terminal of the core for the find box: agents in their usual order, then the others, pinned first. */
+    fun findItems(): List<FindItem> {
+        val ag = agents()
+        val byAddress = ag.associateBy { it.address }
+        val order = ag.map { it.address } + terminals.keys.filter { it !in byAddress && it.isNotEmpty() }
+        val items = order.mapNotNull { address ->
+            val t = terminals[address] ?: return@mapNotNull null
+            val a = byAddress[address]
+            val place = placeOfTerminal(address)
+            val labels = t["labels"]
+            val machine = machineOf(address)
+            val space = place?.space ?: labels["herdr.space"].str?.let { id -> spaces.firstOrNull { it.id == qualify(id, machine) } }
+            val tab = place?.tab ?: space?.tabs?.firstOrNull { it.id == labels["herdr.tab"].str?.let { id -> qualify(id, machine) } }
+            FindItem(
+                address = address,
+                name = a?.app ?: t["foreground"]["name"].str?.ifEmpty { null } ?: t["title"].str?.ifEmpty { null } ?: "terminal",
+                title = a?.title ?: t["title"].str ?: "",
+                folder = cwdOf(address) ?: "",
+                machine = machineLabel(machine),
+                space = space?.let { spaceName(it) },
+                tab = if (space != null && tab != null) tabName(space, tab) else null,
+                pinned = a?.pinned ?: Pins.isPinned(labels[Labels.PINNED].str),
+            )
+        }
+        return Pins.order(items) { it.pinned }
     }
 
     fun cwdOf(address: String?): String? {

@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ViewColumn
 import androidx.compose.material.icons.filled.ViewStream
 import androidx.compose.material3.DrawerValue
@@ -95,6 +96,7 @@ import herdr.app.Conn
 import herdr.app.Session
 import herdr.app.Theme
 import herdr.app.term.TerminalPool
+import herdr.core.AgentTree
 import herdr.core.Axis
 import herdr.core.LeftPanel
 import herdr.core.PanelToggle
@@ -271,7 +273,7 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
                 Row(Modifier.weight(1f)) {
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         if (agentsHome && !wide) {
-                            AgentsHome(session, onOpen = { a -> session.showAgent(a); agentsHome = false }, queueOnScreen = queueInHome, onQueueOpened = {})
+                            AgentsHome(session, onOpen = { a -> session.showAgent(a); agentsHome = false }, queueOnScreen = queueInHome, onQueueOpened = {}, onFound = { agentsHome = false })
                         } else if (space == null || tab == null) {
                             Empty(session, onNewSpace = { dialog = DialogKind.NewSpace(null) })
                         } else {
@@ -372,13 +374,27 @@ private fun Sidebar(
     session: Session, onPicked: () -> Unit, onNewSpace: (String?) -> Unit, onRenameSpace: (Space) -> Unit,
     onCloseSpace: (Space) -> Unit, onSettings: () -> Unit, queueOnScreen: Boolean,
 ) {
+    var finding by remember { mutableStateOf(false) }
+    if (finding) FindPanel(session, onClose = { finding = false }, onOpened = { finding = false; onPicked() })
+    else SidebarList(session, onPicked, onNewSpace, onRenameSpace, onCloseSpace, onSettings, queueOnScreen) { finding = true }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SidebarList(
+    session: Session, onPicked: () -> Unit, onNewSpace: (String?) -> Unit, onRenameSpace: (Space) -> Unit,
+    onCloseSpace: (Space) -> Unit, onSettings: () -> Unit, queueOnScreen: Boolean, onFind: () -> Unit,
+) {
     val agents = session.agents()
+    val byAddress = agents.associateBy { it.address }
+    val branches = AgentTree.build(agents.map { it.address }, { byAddress[it]?.parent }) { byAddress[it]?.pinned == true }
     val groups: List<String?> = listOf<String?>(null) + session.machines.map { it.name }.sorted()
     LazyColumn(Modifier.fillMaxSize().padding(vertical = 8.dp)) {
         item {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Herdr", color = Theme.accent, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
                 Dot(if (session.conn is Conn.Connected) "idle" else "blocked")
+                IconButton(onClick = onFind) { Icon(Icons.Default.Search, "Find a terminal", tint = Theme.dim) }
                 IconButton(onClick = onSettings) {
                     Icon(Icons.Default.Settings, "Settings", tint = if (session.update != null) Theme.accent else Theme.dim)
                 }
@@ -425,20 +441,30 @@ private fun Sidebar(
             Text("AGENTS", color = Theme.dim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             if (agents.isEmpty()) Text("Agents that report status show here.", color = Theme.dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
         }
-        items(agents, key = { "a:${it.address}" }) { a -> AgentRow(session, a, onPicked) }
+        for (b in branches) {
+            val root = byAddress.getValue(b.root)
+            val open = b.helpers.isNotEmpty() && AgentTree.expanded(session.helpersOpen[b.root], b.helpers.map { byAddress.getValue(it).state })
+            item(key = "a:${b.root}") {
+                Column {
+                    AgentRow(session, root, onPicked, nested = false)
+                    if (b.helpers.isNotEmpty()) HelperToggle(session, b.root, b.helpers.size, open, indent = 16.dp)
+                }
+            }
+            if (open) items(b.helpers, key = { "a:$it" }) { h -> AgentRow(session, byAddress.getValue(h), onPicked, nested = true) }
+        }
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AgentRow(session: Session, a: Agent, onPicked: () -> Unit) {
+private fun AgentRow(session: Session, a: Agent, onPicked: () -> Unit, nested: Boolean) {
     val space = session.spaces.firstOrNull { it.id == a.spaceId }
     var menu by remember { mutableStateOf(false) }
     SwipeReveal(session, a, background = Theme.panel) {
         Box {
             Row(
                 Modifier.fillMaxWidth().combinedClickable(onClick = { session.showAgent(a); onPicked() }, onLongClick = { menu = true })
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(start = if (nested) 32.dp else 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Dot(a.state)
@@ -446,7 +472,7 @@ private fun AgentRow(session: Session, a: Agent, onPicked: () -> Unit) {
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            listOfNotNull(a.app, if (a.parent != null) "worker" else null).joinToString(" · "),
+                            listOfNotNull(a.app, if (a.parent != null && !nested) "worker" else null).joinToString(" · "),
                             color = Theme.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
                         )
                         if (a.pinned) Icon(Icons.Default.PushPin, "Pinned", tint = Theme.dim, modifier = Modifier.padding(start = 4.dp).size(12.dp))
@@ -974,28 +1000,69 @@ private fun Composer(
 /** The cover screen's front page: every agent, the ones that need you first. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit, queueOnScreen: Boolean, onQueueOpened: () -> Unit) {
+private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit, queueOnScreen: Boolean, onQueueOpened: () -> Unit, onFound: () -> Unit) {
+    var finding by remember { mutableStateOf(false) }
+    if (finding) FindPanel(session, onClose = { finding = false }, onOpened = { finding = false; onFound() })
+    else AgentsList(session, onOpen, queueOnScreen, onQueueOpened) { finding = true }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AgentsList(session: Session, onOpen: (Agent) -> Unit, queueOnScreen: Boolean, onQueueOpened: () -> Unit, onFind: () -> Unit) {
     val agents = session.agents()
+    val byAddress = agents.associateBy { it.address }
+    val branches = AgentTree.build(agents.map { it.address }, { byAddress[it]?.parent }) { byAddress[it]?.pinned == true }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         item {
             val blocked = agents.count { it.state == "blocked" }
-            Text(
-                when {
-                    agents.isEmpty() -> "No agents running"
-                    blocked > 0 -> "$blocked waiting for you"
-                    else -> "${agents.size} agents"
-                },
-                color = Theme.text, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(4.dp, 4.dp, 4.dp, 12.dp),
-            )
+            Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    when {
+                        agents.isEmpty() -> "No agents running"
+                        blocked > 0 -> "$blocked waiting for you"
+                        else -> "${agents.size} agents"
+                    },
+                    color = Theme.text, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).padding(4.dp, 4.dp, 4.dp, 8.dp),
+                )
+                IconButton(onClick = onFind) { Icon(Icons.Default.Search, "Find a terminal", tint = Theme.dim) }
+            }
         }
         item(key = "queue") { QueueSection(session, onScreen = queueOnScreen, onOpened = onQueueOpened, modifier = Modifier.padding(bottom = 8.dp)) }
-        items(agents, key = { it.address }) { a ->
+        for (b in branches) {
+            val root = byAddress.getValue(b.root)
+            val open = b.helpers.isNotEmpty() && AgentTree.expanded(session.helpersOpen[b.root], b.helpers.map { byAddress.getValue(it).state })
+            item(key = b.root) {
+                Column {
+                    AgentCard(session, root, onOpen, nested = false)
+                    if (b.helpers.isNotEmpty()) HelperToggle(session, b.root, b.helpers.size, open, indent = 4.dp)
+                }
+            }
+            if (open) items(b.helpers, key = { it }) { h -> AgentCard(session, byAddress.getValue(h), onOpen, nested = true) }
+        }
+    }
+}
+
+/** "▾ 3 helpers" under an agent: tap to fold or unfold what it started (kept in memory only). */
+@Composable
+private fun HelperToggle(session: Session, parent: String, count: Int, open: Boolean, indent: Dp) {
+    Text(
+        (if (open) "▾ " else "▸ ") + AgentTree.countText(count), color = Theme.dim, fontSize = 12.sp,
+        modifier = Modifier.fillMaxWidth().clickable { session.helpersOpen[parent] = !open }
+            .semantics { contentDescription = (if (open) "Hide " else "Show ") + AgentTree.countText(count) }
+            .padding(start = indent + 22.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
+    )
+}
+
+/** One agent card on the cover screen's list; [nested] cards (helpers) sit indented under their parent. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AgentCard(session: Session, a: Agent, onOpen: (Agent) -> Unit, nested: Boolean) {
             val space = session.spaces.firstOrNull { it.id == a.spaceId }
             var menu by remember { mutableStateOf(false) }
             SwipeReveal(session, a, background = Theme.bg, inset = 4.dp) {
             Box {
             Row(
-                Modifier.fillMaxWidth().padding(vertical = 4.dp).background(Theme.panel, RoundedCornerShape(10.dp))
+                Modifier.fillMaxWidth().padding(start = if (nested) 24.dp else 0.dp, top = 4.dp, bottom = 4.dp).background(Theme.panel, RoundedCornerShape(10.dp))
                     .border(1.dp, if (a.state == "blocked") Theme.stateColor("blocked").copy(alpha = 0.6f) else Theme.border, RoundedCornerShape(10.dp))
                     .combinedClickable(onClick = { onOpen(a) }, onLongClick = { menu = true }).padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1004,7 +1071,7 @@ private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit, queueOnScreen:
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(a.app + if (a.parent != null) " · worker" else "", color = Theme.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f, fill = false))
+                        Text(a.app + if (a.parent != null && !nested) " · worker" else "", color = Theme.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f, fill = false))
                         if (a.pinned) Icon(Icons.Default.PushPin, "Pinned", tint = Theme.dim, modifier = Modifier.padding(start = 6.dp).size(14.dp))
                     }
                     Text(a.title.ifBlank { a.state }, color = Theme.dim, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -1033,8 +1100,6 @@ private fun AgentsHome(session: Session, onOpen: (Agent) -> Unit, queueOnScreen:
             AgentMenu(session, a, menu) { menu = false }
             }
             }
-        }
-    }
 }
 
 /** The app lock: nothing shows until the phone's owner unlocks it. */
