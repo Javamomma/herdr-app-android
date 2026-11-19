@@ -90,6 +90,10 @@ class CoreClient private constructor(
     private val onClose: () -> Unit,
 ) {
     private val queue = LinkedBlockingQueue<ByteArray>()
+    /** The writer is putting a frame on the wire right now. */
+    @Volatile private var writing = false
+    /** Nothing is waiting to be written and nothing is being written (a big frame has left). */
+    fun idle(): Boolean = queue.isEmpty() && !writing
     private val nextId = AtomicLong(1)
     private val replies = ConcurrentHashMap<Long, CompletableFuture<JsonElement>>()
     private val streams = ConcurrentHashMap<Int, StreamListener>()
@@ -142,8 +146,13 @@ class CoreClient private constructor(
                 while (true) {
                     val bytes = queue.take()
                     if (bytes.isEmpty()) break
-                    output.write(bytes)
-                    if (queue.isEmpty()) output.flush()
+                    writing = true
+                    try {
+                        output.write(bytes)
+                        if (queue.isEmpty()) output.flush()
+                    } finally {
+                        writing = false
+                    }
                 }
             } catch (_: Exception) {
             }
@@ -239,9 +248,15 @@ class CoreClient private constructor(
             throw CoreLostException("$method: lost the core")
         }
         val req = obj("jsonrpc" to "2.0", "id" to id, "method" to method, "params" to params)
-        send(0, Kind.DATA, req.toString().toByteArray())
+        val frame = encodeFrame(0, Kind.DATA, req.toString().toByteArray())
+        if (!closed) queue.offer(frame)
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            // Cancelled: a frame still waiting is taken back so it never goes out (one already being written can't be).
+            queue.remove(frame)
+            replies.remove(id)
+            throw e
         } catch (e: TimeoutException) {
             replies.remove(id)
             throw CoreTimedOutException("$method: no reply from core")

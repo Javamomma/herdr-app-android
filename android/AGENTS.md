@@ -146,16 +146,20 @@ From the 2026-11-12 repair build. Read before changing these paths.
   beside the terminal on the terminal's machine (removed with the terminal), so nothing lands in a project's `git status`; the
   call does not let us pick the place, only the name, and `machine/t7` addresses work. Only `put` is used: no `machine.exec` fallback;
   a core without `terminal.put` in its hello says to `hc update`. Pictures come from the photo picker (`PickVisualMedia`, images) or a
-  share (`ACTION_SEND`, image type, one image): read through the content URI, no permission, no broad storage. Shrink: longest side 2000 px
-  (never enlarged), upright by EXIF, re-encoded (drops location); JPEG at 85, then 70 and 55 if over the cap; a PNG source stays PNG unless
-  it is over 1.5 MB and 3x the JPEG (or over the cap; alpha is drawn on white then). Cap 5 MB after shrinking (the core's own is 8 MB). Name:
-  `photo-yyyyMMdd-HHmmss.jpg|png`, never the original. The path goes into the draft with `AttachPath.insert` (like Paste, `Clip.insertAt`): a
-  space before it unless at the start or after white space; quoted in single quotes (`'` as `'\''`) unless it only has letters, digits and
-  `_ @ % + = : , . / ~ -`; a path with a line break is refused. Timeout 20 s plus 1 s per 50 KB, at most 3 min; cancel interrupts the wait
-  (a file may still have arrived: harmless). A failure only shows a notice; the draft is untouched. It never takes control while watching:
-  it is a core call and a draft edit. A share arriving locked waits (the chooser is drawn only inside the unlocked app); not connected: notice
-  and the picture is dropped; the chooser preselects the last agent opened (`Session.lastAgent`), else the one in view, else the first. The temp
-  file in `cache/attach` is deleted after every upload and at start. Rejected: sending the picture on, writing it through `machine.exec`.
+  share (`ACTION_SEND`, image type, one image, `content` addresses only, extra read without a cast): read through the content URI, no
+  permission. A share is ignored when the activity is restored or launched from history, and dropped (with a notice) if the connection fails
+  before the chooser is answered. **The request is one frame on the connection's single writer**, so keys, credits and Send wait behind it:
+  hence a small cap and, while a terminal is uploading (`Session.attaching`), Send and answers to it are off (`Attach.blocksSend`).
+  Shrink ladder (`Attach.LADDER`, first that fits 2 MB): 2000 px q85, 2000 q70, 1600 q70, 1280 q70, 1280 q55, then refuse; upright by EXIF,
+  re-encoded (drops location); a PNG source stays PNG unless it is over 1.5 MB and 3x the JPEG (or over the cap; alpha is drawn on white
+  then). Name `photo-yyyyMMdd-HHmmss.jpg|png`, never the original. The path goes into the draft through `Session.insertAttached` (current
+  draft, cursor last seen for exactly that text, else the end; never from a composable's old state) with `AttachPath.insert`: a space before
+  unless at the start or after white space, one after unless at the end or before white space; single-quoted (`'` as `'\\''`) unless only
+  `A-Za-z0-9_@%+=:,./~-`; any control character or over 1024 characters is refused. Timeout 20 s + 1 s per 50 KB of base64, max 3 min.
+  Cancel interrupts: a frame still queued is taken back (`CoreClient.call`), and the next upload waits until the worker has stopped and
+  the writer is idle (`CoreClient.idle`). Local failures (storage, memory) have their own notice with no path. A failure leaves the draft
+  alone. Never takes control while watching. Temp file in `cache/attach`, swept after every upload and at start. Rejected: writing the
+  picture through `machine.exec`.
 - **Find and helpers** (`Find`, `AgentTree` in `protocol/Find.kt`, `ui/FindPanel.kt`, `Session.findItems`/`showTerminal`/`helpersOpen`): the
   search button (agents list in the left panel, and the cover screen's list) replaces the list with `FindPanel`; it searches every live terminal of
   the core (`Session.terminals`: agents and plain shells, all spaces and tabs, all machines), not only agents. Every typed word must be found
@@ -186,6 +190,17 @@ From the 2026-11-12 repair build. Read before changing these paths.
   "Show all" when it left text out, when the card clips it, or when the reply is 600 characters or more. The sheet (`session.replyOpen`) never
   attaches or shows a terminal, so it is not "looking" and never takes control. A later build could read the full reply from the agent's
   transcript (label `claude.transcript` names the file) with `file.read`: not done here, by decision.
+||||||| 4788364
+  share (`ACTION_SEND`, image type, one image): read through the content URI, no permission, no broad storage. Shrink: longest side 2000 px
+  (never enlarged), upright by EXIF, re-encoded (drops location); JPEG at 85, then 70 and 55 if over the cap; a PNG source stays PNG unless
+  it is over 1.5 MB and 3x the JPEG (or over the cap; alpha is drawn on white then). Cap 5 MB after shrinking (the core's own is 8 MB). Name:
+  `photo-yyyyMMdd-HHmmss.jpg|png`, never the original. The path goes into the draft with `AttachPath.insert` (like Paste, `Clip.insertAt`): a
+  space before it unless at the start or after white space; quoted in single quotes (`'` as `'\''`) unless it only has letters, digits and
+  `_ @ % + = : , . / ~ -`; a path with a line break is refused. Timeout 20 s plus 1 s per 50 KB, at most 3 min; cancel interrupts the wait
+  (a file may still have arrived: harmless). A failure only shows a notice; the draft is untouched. It never takes control while watching:
+  it is a core call and a draft edit. A share arriving locked waits (the chooser is drawn only inside the unlocked app); not connected: notice
+  and the picture is dropped; the chooser preselects the last agent opened (`Session.lastAgent`), else the one in view, else the first. The temp
+  file in `cache/attach` is deleted after every upload and at start. Rejected: sending the picture on, writing it through `machine.exec`.
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 
