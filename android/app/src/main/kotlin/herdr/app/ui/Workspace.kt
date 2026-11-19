@@ -61,6 +61,8 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -300,6 +302,7 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
             dismissButton = { androidx.compose.material3.TextButton(onClick = { session.closing = null }) { Text("Cancel") } },
         )
     }
+    ShareChooser(session)
     if (snippetsOpen) SnippetsDialog(session, pool, onDismiss = { snippetsOpen = false })
     if (settings) SettingsDialog(session, pool, onDismiss = { settings = false }, onEditConnection = { settings = false; onEditConnection() })
 }
@@ -825,6 +828,20 @@ fun KeyBar(session: Session, pool: TerminalPool) {
         typedField = TextFieldValue(t, TextRange(pos))
         session.drafts[a] = t
     }
+    // A photo's path goes into the message box at the cursor (the box it was attached from), never to the terminal.
+    fun insertPath(a: String, path: String) {
+        if (a != address) { session.appendAttached(a, path); return }
+        val r = herdr.term.AttachPath.insert(field.text, field.selection.start, field.selection.end, path)
+        if (r == null) { session.notice = "That path cannot be added to a message."; return }
+        typedField = TextFieldValue(r.first, TextRange(r.second))
+        session.drafts[a] = r.first
+    }
+    val insertLatest by androidx.compose.runtime.rememberUpdatedState(::insertPath)
+    val picker = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()) { uri ->
+        val a = address
+        if (uri != null && a != null) session.attachPhoto(uri, a) { path -> insertLatest(a, path) }
+    }
+    LaunchedEffect(address, isAgent) { if (isAgent) session.noteOpened(address) }
     fun pasteFromClipboard(toDraft: Boolean) {
         val text = clipboardText(clipboard, session) ?: return
         // With the message box in use the text goes into the draft and nothing reaches the terminal.
@@ -834,6 +851,9 @@ fun KeyBar(session: Session, pool: TerminalPool) {
         Composer(
             session, address, field, onField = { typedField = it; session.drafts[address] = it.text },
             onFocus = { boxFocused = it }, onPaste = { pasteFromClipboard(true) },
+            onAttach = {
+                picker.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
         ) { target() }
     }
     Row(Modifier.fillMaxWidth().background(Theme.panel).horizontalScroll(rememberScrollState()).padding(4.dp)) {
@@ -867,7 +887,7 @@ fun KeyBar(session: Session, pool: TerminalPool) {
 @Composable
 private fun Composer(
     session: Session, address: String, field: TextFieldValue, onField: (TextFieldValue) -> Unit,
-    onFocus: (Boolean) -> Unit, onPaste: () -> Unit, target: () -> herdr.app.term.TerminalController?,
+    onFocus: (Boolean) -> Unit, onPaste: () -> Unit, onAttach: () -> Unit, target: () -> herdr.app.term.TerminalController?,
 ) {
     DisposableEffect(address) { onDispose { onFocus(false) } }
     var sending by remember(address) { mutableStateOf(false) }
@@ -895,6 +915,7 @@ private fun Composer(
         }
         if (draft.isNotBlank() && !draft.startsWith("/") && draft !in session.phrases) Chip("+ save phrase") { session.savePhrases(session.phrases + draft.trim()) }
     }
+    AttachProgress(session, address)
     Row(Modifier.fillMaxWidth().background(Theme.panel).padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.Bottom) {
         androidx.compose.material3.OutlinedTextField(
             value = field, onValueChange = onField,
@@ -903,6 +924,10 @@ private fun Composer(
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences),
         )
         androidx.compose.material3.TextButton(onClick = onPaste, modifier = Modifier.padding(bottom = 4.dp)) { Text("Paste") }
+        androidx.compose.material3.TextButton(
+            onClick = onAttach, enabled = session.canAttach,
+            modifier = Modifier.padding(bottom = 4.dp).semantics { contentDescription = "Attach photo" },
+        ) { Text("📎") }
         androidx.compose.material3.Button(
             enabled = !sending,
             onClick = {

@@ -44,6 +44,9 @@ at the apps made for its socket API, such as
 - **Type box**: write to an agent with your keyboard's autocorrect, swipe and
   voice typing, sent in one go. **Paste** (beside Esc, and on the box) goes
   where you are typing. Your draft stays until the Mac confirms the message.
+- **Attach a photo** (📎 beside Paste, or share a screenshot to Herdr from any app): the picture is
+  shrunk, sent to the agent's terminal on your Mac (herdr-core 0.1.21 or newer) and its path is put in
+  your message. You add the words and press Send.
 - **Answer buttons** with the agent's own options, on its card and pane. They
   only answer the question you were shown; risky ones need press-and-hold.
 - **Saved commands** (⚡): one tap types `git status` or starts Claude Code in

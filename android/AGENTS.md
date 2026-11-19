@@ -130,6 +130,21 @@ From the 2026-11-12 repair build. Read before changing these paths.
   terminal or run, and `verbs` are ignored (actions come later). Items are only in memory, never saved. Refresh: on
   coming on screen (unless tried in the last 30 s), then every 3 minutes, only while composed and the activity is RESUMED;
   a failure keeps the last list, stale. Rejected: another source, background refresh or notifications, `$SHELL -lc`.
+- **Attach a photo** (`Attach` in `protocol/`, `AttachPath` in `terminal/`, `Photos.kt`, `ui/Attach.kt`, `Session.attachPhoto`):
+  the core's `terminal.put` (`terminal`, `name`, `data` base64, at most 8 MB raw; reply `path`, `bytes`) writes to a folder of its own
+  beside the terminal on the terminal's machine (removed with the terminal), so nothing lands in a project's `git status`; the
+  call does not let us pick the place, only the name, and `machine/t7` addresses work. Only `put` is used: no `machine.exec` fallback;
+  a core without `terminal.put` in its hello says to `hc update`. Pictures come from the photo picker (`PickVisualMedia`, images) or a
+  share (`ACTION_SEND`, image type, one image): read through the content URI, no permission, no broad storage. Shrink: longest side 2000 px
+  (never enlarged), upright by EXIF, re-encoded (drops location); JPEG at 85, then 70 and 55 if over the cap; a PNG source stays PNG unless
+  it is over 1.5 MB and 3x the JPEG (or over the cap; alpha is drawn on white then). Cap 5 MB after shrinking (the core's own is 8 MB). Name:
+  `photo-yyyyMMdd-HHmmss.jpg|png`, never the original. The path goes into the draft with `AttachPath.insert` (like Paste, `Clip.insertAt`): a
+  space before it unless at the start or after white space; quoted in single quotes (`'` as `'\''`) unless it only has letters, digits and
+  `_ @ % + = : , . / ~ -`; a path with a line break is refused. Timeout 20 s plus 1 s per 50 KB, at most 3 min; cancel interrupts the wait
+  (a file may still have arrived: harmless). A failure only shows a notice; the draft is untouched. It never takes control while watching:
+  it is a core call and a draft edit. A share arriving locked waits (the chooser is drawn only inside the unlocked app); not connected: notice
+  and the picture is dropped; the chooser preselects the last agent opened (`Session.lastAgent`), else the one in view, else the first. The temp
+  file in `cache/attach` is deleted after every upload and at start. Rejected: sending the picture on, writing it through `machine.exec`.
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 

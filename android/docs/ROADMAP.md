@@ -72,17 +72,19 @@ herdr socket API, not herdr-core. Their ideas were borrowed in 0.2.0.
 3. **Read-only Queue** (built, awaiting phone checks): an optional list of what is waiting on him, from the
    Mac's `panel.py queue` over the existing SSH session, with a stale / could
    not load state. Actions come later, one family at a time.
-4. Small reading and reply improvements (wrapped, selectable file viewer;
+4. **Attach a photo** (built, awaiting phone checks): 📎 by the Type box (Android photo picker) and a Share target;
+   shrunk, uploaded with core `terminal.put`, path inserted into the draft. Needs core 0.1.21.
+5. Small reading and reply improvements (wrapped, selectable file viewer;
    last reply on agent cards; the helper that supplies the last reply cuts it
    at 600 characters, so show it as an excerpt with a way to fetch the rest).
-5. A private release signing key, and trying the CI build on the phone
+6. A private release signing key, and trying the CI build on the phone
    without the cable.
 
 Considered and rejected (audit 2026-11-12): public release on F-Droid or
 Google Play while the official app exists; AI summaries or any model in the
 app; a rewrite in another toolkit or a different terminal engine; a general
 panel format; replacing or splitting this app before trying the official one.
-Deferred: picture attachment, a microphone button, a whole-conversation
+Deferred: a microphone button, a whole-conversation
 view, HTML pages.
 
 ## Decisions

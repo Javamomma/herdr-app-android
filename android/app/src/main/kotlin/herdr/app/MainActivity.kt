@@ -2,6 +2,8 @@ package herdr.app
 
 import android.Manifest
 import android.content.Intent
+import android.net.Uri
+import herdr.core.Attach
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
@@ -46,6 +48,8 @@ class MainActivity : FragmentActivity() {
             HerdrRoot(session, pool, locked = locked, onUnlock = ::unlock)
         }
         if (!handle(intent) && session.profile.ready) session.connect()
+        shared(intent)
+        Photos.sweep(this)
         if (Build.VERSION.SDK_INT >= 33 && session.alerts &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
@@ -56,6 +60,7 @@ class MainActivity : FragmentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handle(intent)
+        shared(intent)
     }
 
     /** A notification or widget tap, or the demo: returns true when it started a connection itself. */
@@ -73,6 +78,23 @@ class MainActivity : FragmentActivity() {
         }
         intent.getStringExtra(EXTRA_SCREEN)?.let { session.requested = it }
         return connected
+    }
+
+    /**
+     * A picture shared to Herdr (`ACTION_SEND`, any image type). Nothing is read here: the chooser asks which agent
+     * once the app is unlocked and connected. With no connection the picture is dropped with a notice.
+     */
+    private fun shared(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND || intent.type?.startsWith("image/") != true) return
+        @Suppress("DEPRECATION")
+        val uri = (if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) else intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+        intent.action = null // a rotation or a later resume must not share it again
+        if (uri == null) { session.notice = "Nothing to attach: the other app sent no picture."; return }
+        if (session.conn !is Conn.Connected && session.conn !is Conn.Connecting) {
+            session.notice = Attach.Failure.NotConnected.notice
+            return
+        }
+        session.sharedPhoto = uri
     }
 
     override fun onStart() {

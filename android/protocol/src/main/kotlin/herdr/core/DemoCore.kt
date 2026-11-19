@@ -223,7 +223,7 @@ class DemoCore {
     private fun serve() {
         try {
             readLine(coreIn) ?: return
-            val methods = USES + listOf("machine.list", "machine.exec", "file.read", "terminal.send", "terminal.keys", "terminal.get")
+            val methods = USES + listOf("machine.list", "machine.exec", "file.read", "terminal.send", "terminal.keys", "terminal.get", "terminal.put")
             val hello = obj("jsonrpc" to "2.0", "id" to 0, "result" to obj("generation" to GENERATION, "version" to "0.2.0-demo", "methods" to methods, "features" to listOf("automatic_input", Watch.FEATURE), "framed" to true))
             synchronized(lock) { coreOut.write((hello.toString() + "\n").toByteArray()); coreOut.flush() }
             while (!closed) {
@@ -310,6 +310,14 @@ class DemoCore {
                 val t = p["terminal"].str ?: ""
                 if (terminals[t]?.get("status")?.obj?.get("state").str == "blocked") setStatus(t, "working", "Working on it")
                 reply(id, obj())
+            }
+            "terminal.put" -> {
+                val t = p["terminal"].str ?: ""
+                if (terminals[t] == null) return error(id, "no terminal $t", "not_found")
+                // Like the core: a folder of its own for the terminal, the name kept (a fixed fake path here).
+                val name = (p["name"].str ?: "file").substringAfterLast('/').ifBlank { "file" }
+                val bytes = java.util.Base64.getDecoder().decode(p["data"].str ?: "").size
+                reply(id, obj("path" to "/tmp/herdr-put/$t/$name", "bytes" to bytes))
             }
             "terminal.label" -> {
                 val t = p["terminal"].str ?: ""

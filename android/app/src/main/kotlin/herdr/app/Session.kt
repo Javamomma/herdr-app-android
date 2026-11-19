@@ -59,6 +59,8 @@ import herdr.core.str
 import herdr.core.tabLabel
 import herdr.core.terminal
 import herdr.core.terminalPane
+import herdr.core.Attach
+import herdr.term.AttachPath
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -1211,6 +1213,75 @@ class Session(private val context: Context) {
         val t = s.tabs.firstOrNull { it.id == activeTab[s.id] } ?: return null
         val pane = (zoomed[t.id] ?: focused[t.id])?.let { t.root.find(it) } ?: t.root.panes().firstOrNull()
         return pane?.terminal
+    }
+
+    /** The terminal a photo is uploading to, or null. One upload at a time. */
+    var attaching by mutableStateOf<String?>(null)
+        private set
+    private var attachJob: Job? = null
+    /** A picture shared to Herdr, waiting for the person to pick an agent (the chooser shows once connected and unlocked). */
+    var sharedPhoto by mutableStateOf<android.net.Uri?>(null)
+    /** The agent opened last, kept on the phone: the share chooser's preselection. */
+    var lastAgent: String? = viewPrefs.getString("lastAgent", null)
+        private set
+
+    fun noteOpened(address: String?) {
+        if (address == null || address == lastAgent) return
+        lastAgent = address
+        viewPrefs.edit().putString("lastAgent", address).apply()
+    }
+
+    val canAttach: Boolean get() = conn is Conn.Connected && attaching == null && Attach.supported(core)
+
+    /**
+     * Uploads a picture beside [address] (`terminal.put`) and calls [done] with the path the core gives, on the
+     * main thread. Nothing is sent to the terminal and nothing takes control of it: the caller edits the draft.
+     * A failure only shows a notice. The temp copy in the cache is deleted either way.
+     */
+    fun attachPhoto(uri: android.net.Uri, address: String, done: (String) -> Unit) {
+        if (attaching != null) return
+        val c = core
+        if (conn !is Conn.Connected || c == null) { notice = Attach.Failure.NotConnected.notice; return }
+        if (!Attach.supported(c)) { notice = Attach.Failure.Unsupported.notice; return }
+        attaching = address
+        attachJob = main.launch {
+            try {
+                val outcome = kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
+                    try {
+                        val ready = Photos.prepare(context, uri)
+                        Attach.upload(c, address, ready.name, ready.file.readBytes())
+                    } catch (e: Photos.Unusable) {
+                        Attach.Outcome.Failed(e.why)
+                    } finally {
+                        Photos.sweep(context)
+                    }
+                }
+                when (outcome) {
+                    is Attach.Outcome.Done -> done(outcome.path)
+                    is Attach.Outcome.Failed -> notice = outcome.why.notice
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                Photos.sweep(context)
+                throw e
+            } catch (e: Exception) {
+                notice = Attach.Failure.Refused(e.message.orEmpty().lineSequence().firstOrNull().orEmpty().take(200).ifEmpty { "something went wrong" }).notice
+            } finally {
+                attaching = null
+                attachJob = null
+            }
+        }
+    }
+
+    fun cancelAttach() {
+        if (attachJob?.isActive == true) notice = "Upload cancelled. Your message is unchanged."
+        attachJob?.cancel()
+    }
+
+    /** Adds [path] at the end of [address]'s draft (when the cursor is not at hand, e.g. after a share). */
+    fun appendAttached(address: String, path: String) {
+        val d = drafts[address] ?: ""
+        AttachPath.insert(d, d.length, d.length, path)?.let { drafts[address] = it.first }
+            ?: run { notice = "That path cannot be added to a message." }
     }
 
     /** Per terminal: the Type composer turned on or off by hand (else: on for agents). */
