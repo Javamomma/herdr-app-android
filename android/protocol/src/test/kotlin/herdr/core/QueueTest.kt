@@ -192,7 +192,7 @@ class QueueTest {
     @Test fun onScreenGate() {
         fun screen(wide: Boolean = false, agentsHome: Boolean = false, drawerOpen: Boolean = false, dialogOver: Boolean = false, panelOver: Boolean = false,
                    foreground: Boolean = true, covered: Boolean = false, peek: String? = null) =
-            Looking.Screen(foreground, covered, dialogOver, wide, agentsHome, drawerOpen, panelOver, emptyList(), null, null, peek)
+            Looking.Screen(foreground, covered, dialogOver, wide, agentsHome, drawerOpen, panelOver, emptyList(), emptyList(), null, null, peek)
         // Folded in a terminal with the drawer shut: not on screen, however long it stays.
         assertFalse(Looking.queueShown(screen(), sidebarBeside = false, otherDialog = false, inAgentsHome = false))
         assertTrue(Looking.queueShown(screen(drawerOpen = true), false, false, false))

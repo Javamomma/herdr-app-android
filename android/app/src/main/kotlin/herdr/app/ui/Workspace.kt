@@ -225,7 +225,7 @@ fun Workspace(session: Session, pool: TerminalPool, onEditConnection: () -> Unit
         // The queue refreshes only while its section is really drawn (never with the drawer shut, or under a dialog).
         val queueScreen = herdr.core.Looking.Screen(
             foreground = true, covered = false, dialogOver = settings || snippetsOpen, wide = wide, agentsHome = agentsHome, drawerOpen = drawerOpen,
-            panelOver = panel != null && !wider, panes = emptyList(), zoomed = null, focused = null, peek = session.peek,
+            panelOver = panel != null && !wider, allPanes = emptyList(), drawn = emptyList(), zoomed = null, focused = null, peek = session.peek,
         )
         val otherDialog = dialog != null || session.closing != null
         val queueInSidebar = herdr.core.Looking.queueShown(queueScreen, LeftPanel.besideShown(wide, session.sidebarHidden), otherDialog, inAgentsHome = false)
