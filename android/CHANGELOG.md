@@ -7,6 +7,8 @@
 - Paste sits beside Esc and goes to the box you are typing in; it says "Nothing to paste" when the clipboard has no text.
 - Unnamed tabs show their agent's title, else their number.
 - Looking at a terminal no longer resizes it on the Mac. The phone watches it at the Mac's size, shrunk to fit (drag sideways when it is wider than the screen), with "Watching · tap to type" in the corner. Tapping it, opening the keyboard or pressing a key takes it over at the phone's size, as before. Sending from the Type box and answer buttons work while watching. Turn it off in Settings: "Watch without resizing the Mac". Needs herdr-core 0.1.17 or newer; older cores, and terminals no window is showing, open as before.
+- Terminal selection bar: Select all (everything, scrollback included; blank lines at the bottom are left out) and Paste, beside Copy and Clear. After a long-press, drag either end of the selection to adjust it.
+- A very large copy is cut to its newest 200,000 characters, and a notice says so, instead of failing on Android's clipboard limit.
 
 ### Fixed
 - Multi-line text from the keyboard is sent as one paste instead of line by line.

@@ -1083,9 +1083,6 @@ class Session(private val context: Context) {
     /** Unsent composer drafts, per terminal. */
     val drafts = mutableStateMapOf<String, String>()
 
-    /** Text copied from a terminal, for the clipboard. */
-    var copied by mutableStateOf<String?>(null)
-
     fun saveFont(px: Int) = viewPrefs.edit().putInt("font", px).apply()
 
     /** The left panel hidden on the wide layout: this phone's own choice, never written to the shared layout. */

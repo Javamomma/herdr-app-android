@@ -42,6 +42,13 @@ object Watch {
      */
     fun nobodySizing(cols: Long?, rows: Long?): Boolean = cols == HEADLESS_COLS && rows == HEADLESS_ROWS
 
+    /**
+     * How far a watched grid wider than the view can be panned right, in unscaled pixels,
+     * so the last column ends at the right padding.
+     */
+    fun maxPan(viewW: Float, pad: Float, cellW: Float, cols: Int, scale: Float): Float =
+        ((cols * cellW * scale + 2 * pad - viewW) / scale.coerceAtLeast(0.01f)).coerceAtLeast(0f)
+
     /** The most typing that waits for control to arrive; more is dropped rather than replayed late. */
     const val HOLD_LIMIT = 64 * 1024
 
@@ -65,4 +72,26 @@ object Watch {
         val dy = if (contentH * scale > availH) viewH - pad - scale * (pad + contentH) else top
         return Fit(scale, dx, dy)
     }
+}
+
+/**
+ * Typing that waits for control to arrive. Once something does not fit, everything after it
+ * is dropped too: a later Enter must not be sent without the paste it was meant to follow.
+ */
+class HeldInput(private val limit: Int = Watch.HOLD_LIMIT) {
+    private val bytes = java.io.ByteArrayOutputStream()
+    var overflowed = false
+        private set
+
+    /** False when this (or earlier) input was dropped. */
+    fun add(more: ByteArray): Boolean {
+        if (overflowed || bytes.size() + more.size > limit) { overflowed = true; return false }
+        bytes.write(more)
+        return true
+    }
+
+    /** What was held, in order; clears it (and the overflow). */
+    fun take(): ByteArray = bytes.toByteArray().also { reset() }
+
+    fun reset() { bytes.reset(); overflowed = false }
 }

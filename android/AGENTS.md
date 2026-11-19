@@ -92,8 +92,22 @@ From the 2026-11-12 repair build. Read before changing these paths.
   (before 0.1.17), the setting off, and terminals at the core's headless size
   (200×120: no window shows them). Rejected: watching only on the cover
   screen, or scaling up small grids.
+- **Watching and selecting together**: `cellAt`, `endNear` and the highlight use the same fit and pan
+  as the drawing (screen = fit applied to content). Long-press, dragging an end, tapping to clear, Copy,
+  Select all and Clear never take control; Paste, the keyboard and key-row keys do (held input, `HeldInput`:
+  once something is dropped for size, everything after it is too). A vertical drag on a mouse or alternate-screen
+  program does nothing while watching (a wheel report would be typing). A new attach or a RESIZE clears the selection.
+  The selection bar replaces the "Watching" label in the same corner.
 - **Scrollback lines are trimmed**: `Line.text(col)` returns a blank past the
   end; use `Emulator.wordAt` for word selection.
+- **Terminal selection** (`Select`, `Sel`, `Clip.limit` in `terminal/`): the bar has Copy,
+  Select all, Paste, Clear; no Cut (the terminal is not editable text). Select all runs from
+  the oldest scrollback line to the last non-blank row (alternate screen: the screen only).
+  A drag that starts within ~28 dp of a finished selection's end moves that end; a touch
+  there that does not move is still a tap and clears. Copies are held to `Clip.MAX_CHARS`
+  (200,000 characters, ~400 KB as UTF-16, under Android's ~1 MB transaction limit), keeping
+  the newest text, with a notice. Bar Paste and key-row Paste share `clipboardText`; the key
+  row still pastes into the draft only while the message box has focus.
 - Decisions and user-facing notices that need tests live in `protocol/` and
   `terminal/` (`LeftPanel`, `SendOutcome`, `Clip`), since `app/` has no tests.
 

@@ -14,6 +14,7 @@ import herdr.core.CoreClient
 import herdr.core.SendOutcome
 import herdr.core.sendMessage
 import herdr.core.StreamListener
+import herdr.core.HeldInput
 import herdr.core.Watch
 import herdr.core.get
 import herdr.core.long
@@ -22,6 +23,7 @@ import herdr.term.Emulator
 import herdr.term.Key
 import herdr.term.Keys
 import herdr.term.Mods
+import herdr.term.Picked
 import kotlinx.serialization.json.JsonElement
 import kotlin.concurrent.thread
 
@@ -55,7 +57,7 @@ class TerminalController(context: Context, val address: String, private val sess
     private var cannotWatch = false
     /** Watching → control in progress: typing waits in [held] for the new channel (UI thread only). */
     private var switching = false
-    private val held = java.io.ByteArrayOutputStream()
+    private val held = HeldInput()
     /** Attached as an observer: the Mac's size, nothing typed (see [herdr.core.Watch]). */
     var watching by mutableStateOf(false)
         private set
@@ -64,8 +66,8 @@ class TerminalController(context: Context, val address: String, private val sess
         private set
     var title by mutableStateOf("")
         private set
-    /** What the person selected (empty: nothing). */
-    var selection by mutableStateOf("")
+    /** What the person selected (null: nothing is selected; the text may still be empty, a blank cell). */
+    var selection by mutableStateOf<Picked?>(null)
         private set
 
     init {
@@ -124,8 +126,8 @@ class TerminalController(context: Context, val address: String, private val sess
         }
     }
 
-    fun onSelection(text: String) {
-        selection = text
+    fun onSelection(picked: Picked?) {
+        selection = picked
     }
 
     /** Text typed on a keyboard; the key bar's sticky Ctrl/Alt apply once. */
@@ -155,8 +157,7 @@ class TerminalController(context: Context, val address: String, private val sess
     fun send(text: String) {
         if (text.isEmpty()) return
         if (watching || switching) {
-            val bytes = text.toByteArray(Charsets.UTF_8)
-            if (held.size() + bytes.size <= Watch.HOLD_LIMIT) held.write(bytes)
+            if (!held.add(text.toByteArray(Charsets.UTF_8))) session.notice = "Too much to send while the terminal switches to this phone's size"
             takeControl()
             return
         }
@@ -211,7 +212,7 @@ class TerminalController(context: Context, val address: String, private val sess
 
     fun toggleKeyboard(visible: Boolean) = if (visible) view.hideKeyboard() else view.showKeyboard()
 
-    fun copySelection(done: (String) -> Unit) = done(view.selectionText())
+    fun selectAll() = view.selectAll()
 
     fun clearSelection() = view.clearSelection()
 
@@ -263,13 +264,17 @@ class TerminalController(context: Context, val address: String, private val sess
             emu.clearAll()
             if (!observe) emu.resize(cols, rows)
         }
+        // The screen was wiped: a selection would point at other text.
+        if (selection != null) view.clearSelection()
         view.invalidate()
         val display = Theme.display(cell)
         thread(name = "attach-$address") {
             val listener = object : StreamListener {
                 override fun onResize(cols: Int, rows: Int) {
                     if (token != mine) return
-                    synchronized(emu) { emu.resize(cols, rows) }
+                    val changed = synchronized(emu) { (emu.cols != cols || emu.rows != rows).also { emu.resize(cols, rows) } }
+                    // The text moved under a selection: drop it.
+                    if (changed) ui.post { if (token == mine && selection != null) view.clearSelection() }
                     view.postInvalidateOnAnimation()
                 }
 
@@ -337,7 +342,7 @@ class TerminalController(context: Context, val address: String, private val sess
                     if (!observe) {
                         if (switching) {
                             switching = false
-                            val typed = held.toByteArray().also { held.reset() }
+                            val typed = held.take()
                             if (typed.isNotEmpty()) {
                                 core.input(a.channel, typed)
                                 view.scrollToBottom()

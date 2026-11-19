@@ -81,4 +81,28 @@ class WatchTest {
         assertEquals(listOf(40 to 12), demo.typingSizes, "a typing viewer's size counts")
         core.close()
     }
+
+    @Test
+    fun held_typing_keeps_its_order_and_drops_everything_after_what_did_not_fit() {
+        val h = HeldInput(limit = 10)
+        assertTrue(h.add("ab".toByteArray()))
+        assertFalse(h.add(ByteArray(20)), "a paste too big to hold")
+        assertFalse(h.add("\r".toByteArray()), "its Enter must not go alone")
+        assertTrue(h.overflowed)
+        h.reset()
+        assertFalse(h.overflowed)
+        assertTrue(h.add("x".toByteArray()))
+        assertEquals("x", String(h.take()))
+        assertEquals(0, h.take().size, "taken once")
+    }
+
+    @Test
+    fun panning_stops_with_the_last_column_at_the_right_padding() {
+        // 400 columns of 10 px at 0.5: 2000 px wide on an 808 px view.
+        val pan = Watch.maxPan(viewW = 808f, pad = 4f, cellW = 10f, cols = 400, scale = 0.5f)
+        val f = Watch.fit(808f, 408f, 4f, 10f, 20f, cols = 400, rows = 10, minScale = 0.5f)
+        val right = f.dx - f.scale * pan + f.scale * (4f + 400 * 10f)
+        assertEquals(808f - 4f, right, 0.01f)
+        assertEquals(0f, Watch.maxPan(808f, 4f, 10f, 80, 1f), "a grid that fits does not pan")
+    }
 }
